@@ -1,0 +1,779 @@
+import React, { useContext, useState, useEffect } from 'react';
+import axios from 'axios';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import InfoIcon from '@mui/icons-material/Info';
+import {
+  StyledTable,
+  StyledTableContainer,
+  StyledTableCell,
+  StyledTableRow,
+  StyledButton,
+  StyledDialog,
+  StyledTextField,
+  StyledSelect,
+  StyledIconButton,
+
+} from './StyledComponents';
+import Paper from '@mui/material/Paper';
+import TableBody from '@mui/material/TableBody';
+import TableHead from '@mui/material/TableHead';
+import TableRow from '@mui/material/TableRow';
+import MenuItem from '@mui/material/MenuItem';
+import Box from '@mui/material/Box';
+import { useTheme } from '@mui/system';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogTitle from '@mui/material/DialogTitle';
+import TableCell from '@mui/material/TableCell'
+import { AuthContext } from "../Components/UserContext";
+import { CleaningServices } from '@mui/icons-material';
+
+function TableComponent() {
+  const apiDomain = process.env.REACT_APP_API_DOMAIN;
+  const theme = useTheme();
+  const isSmallScreen = useMediaQuery(theme.breakpoints.down('sm'));
+  const { email: authEmail,role:authRole, preference} = useContext(AuthContext);
+
+  const [tableData, setTableData] = useState([]);
+  const [tableHeadings, setTableHeadings] = useState([]);
+  const [isPopupOpen, setIsPopupOpen] = useState(false);
+  const [currentEditing, setCurrentEditing] = useState({ rowIndex: null, columnName: '' });
+  const [manualTime, setManualTime] = useState('');
+  const [previousData, setPreviousData] = useState([]);
+  const [loginBy, setLoginBy] = useState('current_user');
+  const [changeHistory, setChangeHistory] = useState([]);
+  const [isHistoryPopupOpen, setIsHistoryPopupOpen] = useState(false);
+  const [accessibleColumns, setAccessibleColumns] = useState([]);
+  const [dropdownOptions, setDropdownOptions] = useState({});
+  const [userRole, setUserRole] = useState('');
+  const [userTeam, setUserTeam] = useState('');
+  const [rolePermissions, setRolePermissions] = useState({});
+  const [preferenceColumns, setPreferenceColumns] = useState([]); // Preference-based access
+  const [ prefAccessible,setPreferenceAccessible]=useState([])
+  const [selectedTracker, setSelectedTracker] = useState('');
+  const [accessibleHeadings, setAccessibleHeadings] = useState([]); // Store filteredHeadings here
+console.log('check heading of accessheading',accessibleHeadings)
+  const currentTime = new Date().toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+
+  const transformData = (data) => {
+    return data.map(item => {
+      const newItem = { ...item };
+      for (const key in newItem) {
+        if (newItem[key] && typeof newItem[key] === 'object' && 'value' in newItem[key]) {
+          newItem[key] = newItem[key].value;
+        } else if (newItem[key] && typeof newItem[key] === 'object') {
+          newItem[key] = JSON.stringify(newItem[key].value);
+        }
+      }
+      return newItem;
+    });
+  };
+
+  const fetchData = async () => {
+    try {
+      const response = await axios.get(`${apiDomain}/client/data/api/tableData?includeId=true`);
+      if (response.status !== 200) throw new Error('Network response was not ok');
+
+      const rawData = response.data;
+      const transformedData = transformData(rawData);
+// Extract the selectedTracker from the transformedData or response
+if (transformedData.length > 0) {
+  const tracker = transformedData[0]["selectedTracker"]; // Assuming selectedTracker is consistent across all rows
+  setSelectedTracker(tracker);
+}
+      const readOnlyData = transformedData.filter(row =>
+        row["Read Only"] === "Yes" && row["selectedTracker"] === "scm"
+      );
+
+      const eastData = transformedData.filter(row =>
+        row["Time Zone Group"] === "E" &&
+        row["Read Only"] === "No" &&
+        row["selectedTracker"] === "scm"
+      );
+
+      const westData = transformedData.filter(row =>
+        row["Time Zone Group"] === "W" &&
+        row["Read Only"] === "No" &&
+        row["selectedTracker"] === "scm"
+      );
+
+      const headings = transformedData.length > 0 ? Object.keys(transformedData[0]).filter(key => key !== '_id' && key !== '__v' && key !== 'Read Only' && key !== 'selectedTracker' && key !== 'Canceled Client') : [];
+
+      setTableHeadings(headings);
+      setTableData([
+        { specialRow: true, label: 'READ-ONLY CLIENTS, PATCHING WINDOW 11 PM to 1 AM ET', type: 'Read Only' },
+        ...readOnlyData,
+        { specialRow: true, label: 'EAST ZONE, PATCHING WINDOW 2 AM to 4 AM ET', type: 'east' },
+        ...eastData,
+        { specialRow: true, label: 'WEST ZONE, PATCHING WINDOW 4 AM to 6 AM ET', type: 'west' },
+        ...westData,
+      ]);
+      setPreviousData(transformedData);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+    const intervalId = setInterval(fetchData, 5000);
+    return () => clearInterval(intervalId);
+  }, []);
+
+
+
+  useEffect(() => {
+    const fetchUserData = async () => {
+      try {
+        const response = await axios.get(`${apiDomain}/client/data/api/userdata`);
+        const usersData = response.data;
+
+        // Find the user that matches the email from AuthContext
+        const currentUserData = usersData.find(user => user.email === authEmail);
+
+        if (currentUserData) {
+          const { role, preference, team, firstName, lastName, loginHistory } = currentUserData;
+          setUserRole(role);
+          setUserTeam(team);
+          setLoginBy(`${firstName} ${lastName}`);
+          console.log('User:', firstName, lastName);
+          if (loginHistory && loginHistory.length > 0) {
+            const lastLogin = loginHistory[loginHistory.length - 1];
+            console.log('Last login:', lastLogin);
+          }
+            // Filter preferences for the selectedTracker
+            const filteredPreferences = preference.filter(pref => pref.product === selectedTracker);
+            setPreferenceAccessible(filteredPreferences);
+            console.log('Filtered User Preferences for Selected Tracker:', filteredPreferences);
+          // Set role-based permissions (editable columns)
+          const accessibleCols = tableHeadings.map(heading => ({
+            heading,
+            editable: rolePermissions[heading] && rolePermissions[heading][role] === true
+          }));
+          setRolePermissions(accessibleCols);
+
+          
+          // Set preference-based visibility (visible columns)
+          const activePreferences = preference.map(pref => pref.headings).flat(); // Flatten preference headings
+          const accessiblePrefs = tableHeadings.map(heading => ({
+            heading,
+            visible: activePreferences.includes(heading)
+          }));
+  
+
+          setPreferenceColumns(accessiblePrefs);
+          setPreferenceAccessible(preference); // Store raw preference data
+          
+          console.log('User Preferences:', preference); // Log preference data
+        } else {
+          console.log('No matching user found.');
+        }
+      } catch (error) {
+        console.error('Error fetching user data:', error);
+      }
+    };
+
+    if (selectedTracker) {
+      fetchUserData();
+    }
+  }, [authEmail, apiDomain, tableHeadings, selectedTracker]);
+  console.log('preferenceColumns:', preferenceColumns);
+  useEffect(() => {
+    const fetchUserPermissions = async () => {
+      try {
+        const response = await axios.get(`${apiDomain}/api/status/heading-product-team-role`);
+        const roleData = response.data;
+  
+        const rolePermissions = roleData.reduce((acc, item) => {
+          if (!acc[item.heading]) acc[item.heading] = {};
+          acc[item.heading][item.role] = true;
+          return acc;
+        }, {});
+  
+        setRolePermissions(rolePermissions);
+  
+        if (authRole === 'admin_role') {
+          setAccessibleColumns(tableHeadings.map(heading => ({ heading, editable: true })));
+        } else {
+          const accessibleCols = tableHeadings.map(heading => ({
+            heading,
+            editable: rolePermissions[heading] && rolePermissions[heading][authRole] === true
+          }));
+          setAccessibleColumns(accessibleCols);
+        }
+      } catch (error) {
+        console.error('Error fetching role permissions:', error);
+      }
+    };
+  
+    fetchUserPermissions();
+  }, [authRole, tableHeadings]);
+  
+  // useEffect(() => {
+  //   if (preference && preference.length > 0) {
+  //     const accessiblePrefs = tableHeadings.map(heading => {
+  //       const isAccessible = preference.some(pref => pref.headings.includes(heading));
+  //       return {
+  //         heading,
+  //         visible: isAccessible
+  //       };
+  //     });
+  //     setPreferenceColumns(accessiblePrefs);
+  //   } else {
+  //     console.warn('No preference data available');
+  //   }
+  // }, [preference, tableHeadings]);
+
+
+  const fetchDropdownOptions = async (product, heading) => {
+    try {
+      const response = await axios.get(`${apiDomain}/api/status/status-options`, {
+        params: { product, heading}
+      });
+      if (response.status === 200) {
+        return response.data; // This should be the array of status options
+      } else {
+        console.error('Failed to fetch dropdown options:', response.status,response.role);
+        return [];
+      }
+    } catch (error) {
+      console.error('Error fetching dropdown options:', error);
+      return [];
+    }
+  };
+
+useEffect(() => {
+    if (prefAccessible.length > 0) {
+      const filteredHeadings = prefAccessible.reduce((acc, pref) => {
+        const matchedHeadings = pref.headings.filter(heading =>
+          tableHeadings.includes(heading)
+        );
+
+        if (matchedHeadings.length > 0) {
+          acc.push(...matchedHeadings);
+        }
+
+        return acc;
+      }, []);
+
+      setAccessibleHeadings(filteredHeadings); // Save to state
+    }
+  }, [prefAccessible, tableHeadings]);
+
+
+  
+
+  const fetchAllDropdownOptions = async () => {
+    const headingsOptions = {};
+  
+    // Assuming the first 7 headings are the ones to skip
+    const relevantHeadings = tableHeadings.slice(7).filter(heading => {
+      // Skip headings that don't need dropdowns
+      return !['someStringHeading1', 'someStringHeading2'].includes(heading);
+    });
+  
+    for (const heading of relevantHeadings) {
+      const options = await fetchDropdownOptions('scm', heading);
+      headingsOptions[heading] = options;
+    }
+  
+    setDropdownOptions(headingsOptions);
+  };
+  useEffect(() => {
+    if (tableHeadings.length > 7) {
+      fetchAllDropdownOptions();
+    }
+  }, [tableHeadings]); // Only run when tableHeadings change
+    
+  const handleDropdownChange = async (event, rowIndex, columnName) => {
+
+    const value = event.target.value;
+    const newData = [...tableData];
+    const rowId = newData[rowIndex]._id;
+    const clientName = newData[rowIndex]["Site Name"];
+    const nestedObject = newData[rowIndex][columnName];
+
+    // Update the local state
+    if (Array.isArray(nestedObject)) {
+      const obj = nestedObject.find((obj) => obj.value === 'pending');
+      if (obj) {
+        obj.value = value;
+      } else {
+        nestedObject.push({
+          value: value,
+          updated: [{
+            name: clientName,
+            timestamp: currentTime,
+            loginBy: loginBy,
+            newValue: value
+          }]
+        });
+      }
+    } else if (typeof nestedObject === 'object' && nestedObject !== null) {
+      nestedObject.value = value;
+      nestedObject.updated = [{
+        name: clientName,
+        timestamp: currentTime,
+        loginBy: loginBy,
+        newValue: value
+      }];
+    } else {
+      newData[rowIndex][columnName] = value;
+    }
+
+    setTableData(newData);
+
+    try {
+      const payload = {
+        clientName,
+        columnName,
+        currentTime,
+        newValue: value,
+        loginBy,
+      };
+
+      const response = await axios.patch(
+        `${apiDomain}/client/data/updateClientData/${rowId}`,
+        payload
+      );
+
+      if (response.status !== 200) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      console.log('Data updated successfully:', response.data);
+    } catch (error) {
+      console.error('Error updating data:', error);
+    }
+  };
+
+  const handleOpenPopup = (rowIndex, columnName) => {
+
+    setCurrentEditing({ rowIndex, columnName });
+    setIsPopupOpen(true);
+  };
+
+  const handleClosePopup = () => {
+    setIsPopupOpen(false);
+    setManualTime('');
+  };
+
+
+
+  const handleSaveManualTime = async () => {
+    if (!manualTime.match(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)) {
+      alert("Please enter a valid time in HH:MM format.");
+      return;
+    }
+
+    const { rowIndex, columnName } = currentEditing;
+    if (rowIndex != null && columnName) {
+      // Update the local state
+      const newData = [...tableData];
+      const rowId = newData[rowIndex]._id;
+      newData[rowIndex][columnName] = manualTime;
+      setTableData(newData);
+
+      // Reset the manual time input for the next use
+      setManualTime('');
+
+      try {
+        // Update the database
+        const response = await axios.patch(`${apiDomain}/client/data/updateTime/${rowId}`, {
+          [columnName]: manualTime, // Dynamically sets the field to update
+        });
+        if (response.status === 200) {
+          console.log('Time updated successfully:', response.data);
+        } else {
+          throw new Error(`Failed to update time. Status code: ${response.status}`);
+        }
+      } catch (error) {
+        console.error('Error updating time:', error);
+      }
+      handleClosePopup();
+    }
+  };
+
+  const handleSaveTime = async () => {
+    const currentTime = new Date().toLocaleTimeString('en-US', {
+      timeZone: 'America/New_York',
+      hour12: false,
+      hour: '2-digit',  // 2-digit hour
+      minute: '2-digit' // 2-digit minute
+    });
+    const { rowIndex, columnName } = currentEditing;
+    if (rowIndex != null && columnName) {
+      const newData = [...tableData];
+      const rowId = newData[rowIndex]._id;
+      newData[rowIndex][columnName] = currentTime;
+      setTableData(newData);
+      try {
+        const response = await axios.patch(`${apiDomain}/client/data/updateTime/${rowId}`, {
+          [columnName]: currentTime, // Dynamically sets the field to update
+        });
+        if (response.status === 200) {
+          console.log('Time updated successfully:', response.data);
+        } else {
+          throw new Error(`Failed to update time. Status code: ${response.status}`);
+        }
+      } catch (error) {
+        console.error('Error updating time:', error);
+      }
+      handleClosePopup();
+    }
+  };
+
+
+  // const handleTimeChange = (event, rowIndex, columnName) => {
+  //   const newData = [...tableData];
+  //   newData[rowIndex][columnName] = event.target.value;
+  //   setTableData(newData);
+  // };
+  // const handleOpenHistoryPopup = async (rowId, columnName) => {
+  //   try {
+  //     const response = await axios.get(`${apiDomain}/client/data/client/tableData/${rowId}/${columnName}`);
+  //     if (response.status !== 200) throw new Error('Failed to fetch change history');
+  //     setChangeHistory(response.data);
+  //     setIsHistoryPopupOpen(true);
+  //   } catch (error) {
+  //     console.error('Error fetching change history:', error);
+  //   }
+  // };
+
+  const handleOpenHistoryPopup = async (rowId, columnName) => {
+    try {
+      const response = await axios.get(`${apiDomain}/client/data/client/tableData/${rowId}/${columnName}`);
+
+      if (response.status === 200 && response.data.length > 0) {
+        // Show only the last 5 changes
+        const lastFiveChanges = response.data.slice(-10);
+        setChangeHistory(lastFiveChanges);
+        setIsHistoryPopupOpen(true);
+      } else {
+        setChangeHistory([]); // No history available
+        setIsHistoryPopupOpen(true);
+      }
+    } catch (error) {
+      console.error('Error fetching change history:', error);
+      setChangeHistory([]); // On error, show no history
+      setIsHistoryPopupOpen(true);
+    }
+  };
+
+  const handleCloseHistoryPopup = () => {
+    setIsHistoryPopupOpen(false);
+    setChangeHistory([]);
+  };
+ 
+  // Combine role-based and preference-based access
+   const isHeadingVisible = (heading) => {
+    if (authRole === 'admin_role') {
+      return true; // Admins can see all headings
+    }
+
+    // Check role-based access
+    const prefAccessible = preferenceColumns.find(col => col.heading === heading);
+
+    // Check preference-based access using accessibleHeadings
+    const isPreferenceVisible = accessibleHeadings.includes(heading);
+
+    // Combine both checks
+    return prefAccessible && prefAccessible.visible && isPreferenceVisible;
+  };
+    // console.log(prefAccessible)
+  
+  const isHeadingEditable = (heading) => {
+    if (authRole === 'admin_role') {
+      return true; // Admins can edit all headings
+    }
+
+    // Check role-based access
+    const roleAccessible = accessibleColumns.find(col => col.heading === heading);
+
+    // Check preference-based access using accessibleHeadings
+    const isPreferenceVisible = accessibleHeadings.includes(heading);
+
+    // Combine both checks
+    return roleAccessible && roleAccessible.editable && isPreferenceVisible;
+  };
+
+
+  
+  // Debugging output
+  // console.log('preferenceColumns:', preferenceColumns);
+  console.log('authRole:', authRole);
+   console.log('rolePermissions:', rolePermissions);
+  console.log('prefAccessible:', prefAccessible);
+  const shouldRenderDropdown = (index) => {
+    // if (dropdownOptions[tableHeadings] && dropdownOptions[tableHeadings].requiredRole === userRole) {
+    //   return true;
+    // }
+    // return false;
+    // Logic to determine if a dropdown should be rendered based on index
+    return index >= 7 && index < 24; // Example condition
+  };
+  // const unauthorizedAccessStyle = {
+  //   color: 'red',
+  //   cursor: 'not-allowed',
+  //   textAlign: 'center',
+  //   padding: '10px',
+  //   fontWeight: 'bold',
+  // };
+
+
+  //const alphabetHeaders = Array.from({ length: tableHeadings.length }, (_, i) => String.fromCharCode(65 + i));
+
+  // Function to dynamically apply header cell style based on column name
+  const getHeaderCellStyle = (heading) => {
+    switch (heading) {
+      case 'Monitoring Alerts Validation':
+      case 'Monitoring ISS/E-Link Validation':
+      case 'Maintenance Mode Disabled':
+        return { backgroundColor: '#F56E7B', color: '#000000', fontWeight: 'bold', textAlign: 'center', border: '1px solid black', padding: "1px" };
+      case 'DB Validation':
+        return { backgroundColor: '#707CF1', color: '#000000', fontWeight: 'bold', textAlign: 'center', border: '1px solid black', padding: "1px" }; // Check this color, seems like a typo
+      case 'SCM App Validation':
+        return { backgroundColor: '#00BBBA', color: '#000000', fontWeight: 'bold', textAlign: 'center', border: '1px solid black', padding: "1px" };
+      default:
+        return { backgroundColor: '#151744', color: 'white', fontWeight: 'bold', textAlign: 'center', border: '1px solid black', padding: "1px" }; // Default style for other headers
+    }
+  };
+
+  const renderDropdownValue = (valueObj) => {
+    const value = valueObj.value || valueObj;
+    const style = {
+      color: value === 'Completed' ? 'green' : value === 'Issue Detected' ? 'red' : 'default',
+      minWidth: 10,
+    };
+    return <div style={style}>{value}</div>;
+  };
+
+  const renderCellValue = (value) => {
+    if (value && typeof value === 'object') {
+      if ('value' in value) {
+        return value.value; // Render the 'value' property if it exists
+      } else {
+        // Render a stringified version of the object for debugging purposes
+        return JSON.stringify(value);
+      }
+    }
+    return value; // If it's a primitive value, render it directly
+  };
+
+  const handleManualTimeChange = (e) => {
+    const value = e.target.value;
+    // Allow only numbers and a single colon
+    if (/^[0-9]{0,2}:[0-9]{0,2}$/.test(value) || /^[0-9]{0,2}$/.test(value) || /^[0-9]{0,2}:[0-9]{0,2}$/.test(value + ':')) {
+      setManualTime(value);
+    }
+  };
+
+  const handleManualTimeBlur = () => {
+    let [hours, minutes] = manualTime.split(':');
+    hours = hours || '00';
+    minutes = minutes || '00';
+
+    if (hours.length === 1) hours = '0' + hours;
+    if (minutes.length === 1) minutes = '0' + minutes;
+
+    const formattedTime = `${hours}:${minutes}`;
+    setManualTime(formattedTime);
+  };
+
+
+  const siteNameIndex = tableHeadings.findIndex(heading => heading === "Site Name");
+  const dataCenterIndex = tableHeadings.findIndex(heading => heading === "Data Center");
+  let eastCounter = 1;
+  let westCounter = 1;
+  let readOnlyCounter = 1;
+  
+  return (
+    <>
+<StyledTableContainer component={Paper}>
+  <h1>SCM Tracker-:</h1>
+  <StyledTable aria-label="customized table">
+    <TableHead>
+      <TableRow>
+        <TableCell style={getHeaderCellStyle()}>#</TableCell>
+        {tableHeadings.map((heading, index) => (
+          // If the preference is true, show the heading
+          isHeadingVisible(heading) && (
+            <StyledTableCell
+              key={index}
+              style={getHeaderCellStyle(heading)}
+              className={index === siteNameIndex || index === dataCenterIndex ? 'stickyColumn' : ''}
+            >
+              {heading}
+            </StyledTableCell>
+          )
+        ))}
+      </TableRow>
+    </TableHead>
+    <TableBody>
+      {tableData.map((row, rowIndex) => {
+        if (row.specialRow) {
+          if (row.type === 'east') eastCounter = 1;
+          else if (row.type === 'west') westCounter = 1;
+          else if (row.type === 'Read Only') readOnlyCounter = 1;
+          return (
+            <StyledTableRow key={`special-${row.type}-${rowIndex}`} className="specialRow">
+              <StyledTableCell colSpan={tableHeadings.length + 1} className="specialRowLabel">
+                {row.label}
+              </StyledTableCell>
+            </StyledTableRow>
+          );
+        } else {
+          const isReadOnlyRow = row["Read Only"] === "Yes";
+          let currentCounter;
+          if (isReadOnlyRow) {
+            currentCounter = readOnlyCounter++;
+          } else {
+            currentCounter = row["Time Zone Group"] === "E" ? eastCounter++ : westCounter++;
+          }
+          const isCanceledClient = row["Canceled Client"] === "Yes";
+
+          return (
+            <StyledTableRow key={row._id} className={isCanceledClient ? 'canceledRow' : ''}>
+              <StyledTableCell>{currentCounter}</StyledTableCell>
+              {tableHeadings.map((heading, columnIndex) => {
+                // Check visibility based on preference
+                const visible = isHeadingVisible(heading);
+                
+                // Check editability based on role
+                const editable = isHeadingEditable(heading);
+
+                // Handle specific column types
+                const isTimeInputColumn = heading === 'SCM App Group 2 - Complete (Enter EST Time in 24h format)' ||
+                  heading === 'Patch Reboots Complete (Enter EST Time in 24h format)';
+                const isDropdown = shouldRenderDropdown(columnIndex);
+                const isComplianceDropdown = heading === 'Azure Gold Image Compliance Status';
+                const isSiteNameColumn = columnIndex === siteNameIndex || columnIndex === dataCenterIndex;
+                const fieldClassName = !editable ? 'disabledSelect' : '';
+
+                return (
+                  <StyledTableCell
+                    key={columnIndex}
+                    className={`${isSiteNameColumn ? 'stickyColumn' : ''}`}
+                  >
+                    {visible ? (
+                      columnIndex < 7 ? (
+                        renderCellValue(row[heading])
+                      ) : isTimeInputColumn ? (
+                        <StyledButton
+                          onClick={editable && !isCanceledClient ? () => handleOpenPopup(rowIndex, heading) : null}
+                          className={`inputTime ${fieldClassName}`} disabled={!editable || isCanceledClient}>
+                          {row[heading] ? row[heading] : 'Set Time'}
+                        </StyledButton>
+                      ) : isDropdown || isComplianceDropdown ? (
+                        <Box className="dropdownContainer" style={{ display: 'flex', flexDirection: 'row' }}>
+                          <StyledSelect
+                            value={row[heading] || 'Pending'}
+                            onChange={editable && !isCanceledClient ? (event) => handleDropdownChange(event, rowIndex, heading) : null}
+                            className={`select ${fieldClassName}`}
+                            IconComponent={KeyboardArrowDownIcon}
+                            renderValue={(value) => renderDropdownValue(value)}
+                            disabled={!editable || isCanceledClient}
+                          >
+                            {dropdownOptions[heading]?.map((option, optionIndex) => (
+                              <MenuItem key={optionIndex} value={option} style={{
+                                color: option === 'Completed' ? 'green' : option === 'Issue Detected' ? 'red' : 'default',
+                              }}>
+                                {option}
+                              </MenuItem>
+                            ))}
+                          </StyledSelect>
+                          <StyledIconButton
+                            className={`infoButton ${fieldClassName}`}
+                            onClick={() => handleOpenHistoryPopup(row._id, heading)}
+                            disabled={!editable || isCanceledClient}
+                          >
+                            <InfoIcon />
+                          </StyledIconButton>
+                        </Box>
+                      ) : (
+                        renderCellValue(row[heading,rowIndex, columnIndex])
+                      )
+                    ) : (
+                      null
+                    )}
+                  </StyledTableCell>
+                );
+              })}
+            </StyledTableRow>
+          );
+        }
+      })}
+    </TableBody>
+  </StyledTable>
+</StyledTableContainer>
+      <StyledDialog open={isPopupOpen} onClose={handleClosePopup}>
+        <DialogActions className="inputContainer">
+          <StyledTextField
+            className="timeInput"
+            type="text"
+            value={manualTime}
+            onChange={handleManualTimeChange}
+            onBlur={handleManualTimeBlur}
+            placeholder="HH:MM"
+            InputLabelProps={{
+              shrink: true,
+            }}
+          />
+          <StyledButton onClick={handleSaveManualTime} color="primary" className="buttonsave">
+            Save
+          </StyledButton>
+          <StyledButton onClick={handleSaveTime} color="primary" className="button">
+            Set Current Time EST
+          </StyledButton>
+          <StyledButton onClick={handleClosePopup} color="secondary">
+            Cancel
+          </StyledButton>
+        </DialogActions>
+      </StyledDialog>
+      <StyledDialog open={isHistoryPopupOpen} onClose={handleCloseHistoryPopup} style={{ width: 'auto', maxWidth: 2000 }}>
+        <DialogTitle>Change History</DialogTitle>
+        <DialogContent className="dialogContent" >
+          {changeHistory.length > 0 ? (
+            <StyledTable>
+              <TableHead>
+                <TableRow>
+                  <StyledTableCell>Date/Time</StyledTableCell>
+                  <StyledTableCell>Status</StyledTableCell>
+                  <StyledTableCell>Changed By</StyledTableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {changeHistory.map((change, index) => (
+                  <StyledTableRow key={index}>
+                    <StyledTableCell style={{ fontWeight: 'normal' }}>{change.timestamp}</StyledTableCell>
+                    <StyledTableCell style={{ fontWeight: 'normal' }}>{change.value}</StyledTableCell>
+                    <StyledTableCell style={{ fontWeight: 'normal' }}>{change.loginBy}</StyledTableCell>
+                  </StyledTableRow>
+                ))}
+              </TableBody>
+            </StyledTable>
+          ) : (
+            <div>No change history available.</div>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <StyledButton onClick={handleCloseHistoryPopup} color="primary">
+            Close
+          </StyledButton>
+        </DialogActions>
+      </StyledDialog>
+    </>
+  );
+}
+
+export default TableComponent;
