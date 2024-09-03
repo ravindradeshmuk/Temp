@@ -33,7 +33,7 @@ function TableComponent() {
   const apiDomain = process.env.REACT_APP_API_DOMAIN;
   const theme = useTheme();
   const isSmallScreen = useMediaQuery(theme.breakpoints.down('sm'));
-  const { email: authEmail,role:authRole, preference} = useContext(AuthContext);
+  const { email: authEmail,role:authRole} = useContext(AuthContext);
 
   const [tableData, setTableData] = useState([]);
   const [tableHeadings, setTableHeadings] = useState([]);
@@ -164,12 +164,12 @@ if (transformedData.length > 0) {
 
           
           // Set preference-based visibility (visible columns)
-          const activePreferences = preference.map(pref => pref.headings).flat(); // Flatten preference headings
           const accessiblePrefs = tableHeadings.map(heading => ({
             heading,
-            visible: activePreferences.includes(heading)
+            visible: filteredPreferences.some(pref => pref.headings.includes(heading))
           }));
   
+          console.log('Filtered User Preferences for Selected Tracker:', filteredPreferences);
 
           setPreferenceColumns(accessiblePrefs);
           setPreferenceAccessible(preference); // Store raw preference data
@@ -475,38 +475,30 @@ useEffect(() => {
     setChangeHistory([]);
   };
  
-  // Combine role-based and preference-based access
-   const isHeadingVisible = (heading) => {
-    if (authRole === 'admin_role') {
-      return true; // Admins can see all headings
-    }
+ // Function to check if the heading is visible based on both role and preferences
+const isHeadingVisible = (heading) => {
+  if (authRole === 'admin_role') {
+    return true;
+  }
 
-    // Check role-based access
-    const prefAccessible = preferenceColumns.find(col => col.heading === heading);
+  const prefAccessible = preferenceColumns.find(col => col.heading === heading);
+  const isPreferenceVisible = accessibleHeadings.includes(heading);
 
-    // Check preference-based access using accessibleHeadings
-    const isPreferenceVisible = accessibleHeadings.includes(heading);
+  return prefAccessible && prefAccessible.visible && isPreferenceVisible;
+};
 
-    // Combine both checks
-    return prefAccessible && prefAccessible.visible && isPreferenceVisible;
-  };
-    // console.log(prefAccessible)
+// Function to check if the heading is editable based on both role and preferences
+const isHeadingEditable = (heading) => {
+  if (authRole === 'admin_role') {
+    return true;
+  }
+
+  const roleAccessible = accessibleColumns.find(col => col.heading === heading);
+  const isPreferenceVisible = accessibleHeadings.includes(heading);
+
+  return roleAccessible && roleAccessible.editable && isPreferenceVisible;
+};
   
-  const isHeadingEditable = (heading) => {
-    if (authRole === 'admin_role') {
-      return true; // Admins can edit all headings
-    }
-
-    // Check role-based access
-    const roleAccessible = accessibleColumns.find(col => col.heading === heading);
-
-    // Check preference-based access using accessibleHeadings
-    const isPreferenceVisible = accessibleHeadings.includes(heading);
-
-    // Combine both checks
-    return roleAccessible && roleAccessible.editable && isPreferenceVisible;
-  };
-
 
   
   // Debugging output
@@ -606,7 +598,7 @@ useEffect(() => {
       <TableRow>
         <TableCell style={getHeaderCellStyle()}>#</TableCell>
         {tableHeadings.map((heading, index) => (
-          // If the preference is true, show the heading
+          // Check if the heading is visible based on both role and preference
           isHeadingVisible(heading) && (
             <StyledTableCell
               key={index}
@@ -622,9 +614,6 @@ useEffect(() => {
     <TableBody>
       {tableData.map((row, rowIndex) => {
         if (row.specialRow) {
-          if (row.type === 'east') eastCounter = 1;
-          else if (row.type === 'west') westCounter = 1;
-          else if (row.type === 'Read Only') readOnlyCounter = 1;
           return (
             <StyledTableRow key={`special-${row.type}-${rowIndex}`} className="specialRow">
               <StyledTableCell colSpan={tableHeadings.length + 1} className="specialRowLabel">
@@ -635,24 +624,18 @@ useEffect(() => {
         } else {
           const isReadOnlyRow = row["Read Only"] === "Yes";
           let currentCounter;
-          if (isReadOnlyRow) {
-            currentCounter = readOnlyCounter++;
-          } else {
-            currentCounter = row["Time Zone Group"] === "E" ? eastCounter++ : westCounter++;
-          }
+          currentCounter = isReadOnlyRow ? readOnlyCounter++ : eastCounter++;
+
           const isCanceledClient = row["Canceled Client"] === "Yes";
 
           return (
             <StyledTableRow key={row._id} className={isCanceledClient ? 'canceledRow' : ''}>
               <StyledTableCell>{currentCounter}</StyledTableCell>
               {tableHeadings.map((heading, columnIndex) => {
-                // Check visibility based on preference
+                // Check visibility and editability based on role and preference
                 const visible = isHeadingVisible(heading);
-                
-                // Check editability based on role
                 const editable = isHeadingEditable(heading);
 
-                // Handle specific column types
                 const isTimeInputColumn = heading === 'SCM App Group 2 - Complete (Enter EST Time in 24h format)' ||
                   heading === 'Patch Reboots Complete (Enter EST Time in 24h format)';
                 const isDropdown = shouldRenderDropdown(columnIndex);
@@ -671,7 +654,9 @@ useEffect(() => {
                       ) : isTimeInputColumn ? (
                         <StyledButton
                           onClick={editable && !isCanceledClient ? () => handleOpenPopup(rowIndex, heading) : null}
-                          className={`inputTime ${fieldClassName}`} disabled={!editable || isCanceledClient}>
+                          className={`inputTime ${fieldClassName}`} 
+                          disabled={!editable || isCanceledClient}
+                        >
                           {row[heading] ? row[heading] : 'Set Time'}
                         </StyledButton>
                       ) : isDropdown || isComplianceDropdown ? (
@@ -701,11 +686,9 @@ useEffect(() => {
                           </StyledIconButton>
                         </Box>
                       ) : (
-                        renderCellValue(row[heading,rowIndex, columnIndex])
+                        renderCellValue(row[heading, rowIndex, columnIndex])
                       )
-                    ) : (
-                      null
-                    )}
+                    ) : null}
                   </StyledTableCell>
                 );
               })}
