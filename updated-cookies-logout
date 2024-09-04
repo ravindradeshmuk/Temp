@@ -1,0 +1,136 @@
+import React, { createContext, useState, useEffect, useCallback } from "react";
+import Cookies from "js-cookie";
+
+export const AuthContext = createContext();
+
+export const AuthProvider = ({ children }) => {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [team, setTeam] = useState("");
+  const [role, setRole] = useState("");
+  const [status, setStatus] = useState("");
+
+  const broadcastChannel = new BroadcastChannel('auth_channel');
+
+  const checkLoginStatus = useCallback(() => {
+    const token = Cookies.get("token");
+    const storedFirstName = Cookies.get("firstName");
+    const storedLastName = Cookies.get("lastName");
+    const storedEmail = Cookies.get("email");
+    const storedTeam = Cookies.get("team");
+    const storedRole = Cookies.get("role");
+    const storedStatus = Cookies.get("status");
+
+    if (token && storedFirstName && storedLastName && storedEmail && storedTeam && storedRole && storedStatus) {
+      setIsLoggedIn(true);
+      setFirstName(storedFirstName);
+      setLastName(storedLastName);
+      setEmail(storedEmail);
+      setTeam(storedTeam);
+      setRole(storedRole);
+      setStatus(storedStatus);
+    } else {
+      setIsLoggedIn(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkLoginStatus();
+
+    broadcastChannel.onmessage = (event) => {
+      if (event.data === 'logout') {
+        logout(false);
+      } else if (event.data === 'login') {
+        checkLoginStatus();
+      }
+    };
+
+    return () => {
+      broadcastChannel.close();
+    };
+  }, [checkLoginStatus]);
+
+  const login = (token, user, expireDays = 7) => {
+    if (Cookies.get("token")) {
+      console.warn("User is already logged in on another tab.");
+      return;
+    }
+
+    const options = { expires: expireDays }; // Set cookie expiration time
+
+    Cookies.set("token", token, options);
+    Cookies.set("firstName", user.firstName, options);
+    Cookies.set("lastName", user.lastName, options);
+    Cookies.set("email", user.email, options);
+    Cookies.set("team", user.team, options);
+    Cookies.set("role", user.role, options);
+    Cookies.set("status", user.status, options);
+    broadcastChannel.postMessage('login'); // Notify other tabs of the login
+
+    setFirstName(user.firstName);
+    setLastName(user.lastName);
+    setEmail(user.email);
+    setTeam(user.team);
+    setRole(user.role);
+    setStatus(user.status);
+    setIsLoggedIn(true);
+  };
+
+  const logout = (shouldReload = true) => {
+    Cookies.remove("token");
+    Cookies.remove("firstName");
+    Cookies.remove("lastName");
+    Cookies.remove("email");
+    Cookies.remove("team");
+    Cookies.remove("role");
+    Cookies.remove("status");
+
+    setFirstName("");
+    setLastName("");
+    setEmail("");
+    setTeam("");
+    setRole("");
+    setStatus("");
+    setIsLoggedIn(false);
+    broadcastChannel.postMessage('logout'); // Notify other tabs of the logout
+
+    if (shouldReload) {
+      window.location.reload(); // Refresh the page after logout
+    }
+  };
+
+  return (
+    <AuthContext.Provider value={{ isLoggedIn, firstName, lastName, email, team, role, status, login, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+##########################################################################################################################
+ const handleLogout = () => {
+    // Remove user data from localStorage
+    localStorage.removeItem("userInfo");
+    localStorage.removeItem("token");
+  
+    // Remove authentication cookies
+    Cookies.remove("token");
+    Cookies.remove("firstName");
+    Cookies.remove("lastName");
+    Cookies.remove("email");
+    Cookies.remove("team");
+    Cookies.remove("role");
+    Cookies.remove("status");
+  
+    // Notify other tabs or components about the logout
+    const broadcastChannel = new BroadcastChannel('auth_channel');
+    broadcastChannel.postMessage('logout');
+    broadcastChannel.close();
+  
+    // Redirect to the home page
+    navigate("/home");
+  
+    // Optionally, reload the page to ensure all states are reset
+    window.location.reload();
+  };
