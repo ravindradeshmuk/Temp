@@ -1,0 +1,370 @@
+const express = require('express');
+const router = express.Router();
+const Client = require('../models/headingSchema'); // Assuming your schema is defined in 'client.js' file
+const mongoose = require('mongoose');
+// const  broadcastUpdate = require('../server');
+const ChangeHistory = require('../models/ChangeHistory'); // ChangeHistory
+// const LoginHistory = require('../models/loginHistory'); // Adjust the path as necessary
+ const loginHistories=require('../models/loginHistory')
+// const scmClient = require('../models/headingSchema');
+const User=require('../models/User')
+//backned code
+
+
+// Define the route
+router.get('/api/tableData', async (req, res) => {
+  try {
+    const includeId = req.query.includeId === 'true';
+    
+    // Fetch data from the database
+    const clients = await Client.find({}, includeId ? '' : '-_id');
+    
+    if (clients.length === 0) {
+      return res.json([]);
+    }
+    
+    // Get all keys from the first client object to create the desired order dynamically
+    const firstClientObj = clients[0].toObject();
+    const dynamicOrder = Object.keys(firstClientObj);
+    
+    // Function to reorder keys based on the dynamic order
+    const reorderKeys = (obj, order) => {
+      const orderedObj = {};
+      order.forEach(key => {
+        if (key in obj) {
+          orderedObj[key] = obj[key];
+        }
+      });
+      return orderedObj;
+    };
+    
+    // Function to get the last updated value from nested arrays
+    const getLastUpdatedValue = (obj) => {
+      if (Array.isArray(obj) && obj.length > 0) {
+        const lastUpdate = obj[obj.length - 1];
+        return lastUpdate.value;
+      }
+      return obj;
+    };
+    
+    // Reorder keys and extract last updated values for each client object
+    const orderedClients = clients.map(client => {
+      const clientObj = client.toObject();
+      const updatedClientObj = {};
+      for (const key in clientObj) {
+        updatedClientObj[key] = getLastUpdatedValue(clientObj[key]);
+      }
+      return reorderKeys(updatedClientObj, dynamicOrder);
+    });
+    
+    res.json(orderedClients);
+  } catch (error) {
+    console.error('Error fetching clients:', error); // Debugging log
+    res.status(500).send('Error fetching clients');
+  }
+});
+// Get all first names and last names from login history
+// router.get('/names', async (req, res) => {
+//   try {
+//     const latestUser = await User.findOne().sort({ lastActive: -1 });
+//     if (!latestUser) {
+//       return res.status(404).json({ message: "No users found" });
+//     }
+//     res.json({ 
+//       firstName: latestUser.firstName,
+//       lastName: latestUser.lastName
+//     });
+//   } catch (error) {
+//     res.status(500).json({ message: "Error fetching latest user" });
+//   }
+// });
+// Assuming you have a middleware to authenticate the user and set req.user
+// router.get('/names/:id', async (req, res) => {
+//   try {
+//     const { _id } = req.params;// Assuming you have a user object in req
+//     const user = await User.findById(_id, 'firstName lastName'); // Assuming User is your user model
+
+//     if (!user) {
+//       return res.status(404).send({ message: 'User not found' });
+//     }
+
+//     res.status(200).send({ firstName: user.firstName, lastName: user.lastName });
+//   } catch (error) {
+//     console.error('Error fetching user names:', error);
+//     res.status(500).send({ message: 'Internal server error' });
+//   }
+// });
+// API route to fetch the last login history entry
+// router.get('/user/:userId', async (req, res) => {
+//   try {
+//       const userId = req.params.userId;
+
+//       // Validate and cast the userId to ObjectId
+//       if (!mongoose.Types.ObjectId.isValid(userId)) {
+//           return res.status(400).json({ message: 'Invalid user ID' });
+//       }
+
+//       // Fetch user data by ID and select specific fields
+//       const user = await User.findById(userId).select('firstName lastName email team role signupTime timezone approveTime status loginHistory');
+      
+//       if (!user) {
+//           return res.status(404).json({ message: 'User not found' });
+//       }
+
+//       // Extract the last item from loginHistory array
+//       const lastLoginHistory = user.loginHistory[user.loginHistory.length - 1];
+
+//       // Replace loginHistory array with the last item only
+//       user.loginHistory = [lastLoginHistory];
+
+//       // Send the user data as JSON response
+//       res.json(user);
+//   } catch (error) {
+//       console.error(error);
+//       res.status(500).json({ message: 'Error retrieving user data' });
+//   }
+// });
+// user.controller.js
+
+router.get('/api/userdata', async (req, res) => {
+  try {
+    // Fetch user team data from the database
+    const userData = await User.find().lean().exec();
+    res.json(userData);
+  } catch (error) {
+    console.error('Error fetching user data:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
+// router.patch('/updateClientData/:id', async (req, res) => {
+//   const { id } = req.params;
+//   const { clientName, columnName, newValue, loginBy,currentTime} = req.body;
+//   try {
+//     const client = await Client.findById(id);
+//     if (!client) {
+//       return res.status(404).send({ message: 'Client not found' });
+//     }
+//     const column = client[columnName];
+//     if (!column) {
+//       return res.status(400).send({ message: `Column ${columnName} not found` });
+//     }
+//     if (Array.isArray(column)) {
+//       const objIndex = column.findIndex((obj) => obj.value === 'pending');
+//       if (objIndex !== -1) {
+//         column[objIndex].value = newValue;
+//         column[objIndex].updated.push({
+//           name: clientName,
+//           timestamp:currentTime,
+//           loginBy: loginBy,
+//           newValue: newValue
+//         });
+//       } else {
+//         column.push({
+//           value: newValue,
+//           updated: [{
+//             name: clientName,
+//             timestamp:currentTime,
+//             loginBy: loginBy,
+//             newValue: newValue
+//           }]
+//         });
+//       }
+//     } else if (typeof column === 'object' && column.updated) {
+//       if (column.value === 'pending') {
+//         column.value = newValue;
+//         column.updated.push({
+//           name: clientName,
+//           timestamp:currentTime,
+//           loginBy: loginBy,
+//           newValue: newValue
+//         });
+//       } else {
+//         column.value = newValue;
+//         column.updated = [{
+//           name: clientName,
+//           timestamp:currentTime,
+//           loginBy: loginBy,
+//           newValue: newValue
+//         }];
+//       }
+//     } else {
+//       return res.status(400).send({ message: `Column ${columnName} has an invalid data structure` });
+//     }
+//     client.markModified(columnName);
+//     await client.save();
+//     res.status(200).send({ message: 'Client updated successfully', client });
+//   } catch (error) {
+//     console.error('Error updating client:', error);
+//     res.status(500).send({ message: 'Internal server error' });
+//   }
+// });
+//
+// Updated Route
+router.patch('/updateClientData/:id', async (req, res) => {
+  const { id } = req.params;
+  const { clientName, columnName, newValue, loginBy, currentTime, caseNumber, notes } = req.body;
+  
+  try {
+    const client = await Client.findById(id);
+    if (!client) {
+      return res.status(404).send({ message: 'Client not found' });
+    }
+    
+    const column = client[columnName];
+    if (!column) {
+      return res.status(400).send({ message: `Column ${columnName} not found` });
+    }
+    
+    const updateObject = {
+      name: clientName,
+      timestamp: currentTime,
+      loginBy: loginBy,
+      newValue: newValue,
+      caseNumber: caseNumber || '',
+      notes: notes || ''
+    };
+    
+    if (Array.isArray(column)) {
+      const objIndex = column.findIndex((obj) => obj.value === 'pending');
+      if (objIndex !== -1) {
+        column[objIndex].value = newValue;
+        column[objIndex].updated.push(updateObject);
+        if (caseNumber && notes) {
+          column[objIndex].caseNumber = caseNumber;
+          column[objIndex].notes = notes;
+        }
+      } else {
+        column.push({
+          value: newValue,
+          updated: [updateObject],
+          // caseNumber: caseNumber || '',
+          // notes: notes || ''
+        });
+      }
+    } else if (typeof column === 'object' && column.updated) {
+      column.value = newValue;
+      column.updated.push(updateObject);
+      if (caseNumber && notes) {
+        column.caseNumber = caseNumber;
+        column.notes = notes;
+      }
+    } else {
+      return res.status(400).send({ message: `Column ${columnName} has an invalid data structure` });
+    }
+    
+    client.markModified(columnName);
+    await client.save();
+    res.status(200).send({ message: 'Client updated successfully', client });
+  } catch (error) {
+    console.error('Error updating client:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+router.patch('/updateTime/:id', async (req, res) => {
+  const { id } = req.params;
+  const updateData = req.body; // This could be { columnName: newValue }
+
+  try {
+    // Find the document by _id and update the specified field
+    const updatedDocument = await Client.findByIdAndUpdate(id, updateData, { new: true });
+    if (updatedDocument) {
+      res.status(200).json(updatedDocument)
+    // broadcastUpdate(updatedDocument); // Emit update to all clients
+    console.log('Broadcasting update:', updatedDocument);
+
+     
+    } else {
+      res.status(404).send('Document not found');
+    }
+  } catch (error) {
+    console.error('Error updating document:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+// Update an existing resource
+router.patch('/updateAssignedResource/:id', async (req, res) => {
+  const id = req.params.id; // Simplified extraction for readability
+  const updateData = req.body;
+
+  if (!id) {
+    return res.status(400).send('ID is undefined or missing');
+  }
+
+  console.log("Attempting to update document with ID:", id); 
+  try {
+    const updatedDocument = await Client.findByIdAndUpdate(id, updateData, { new: true });
+    if (updatedDocument) {
+      res.status(200).json(updatedDocument);
+      // broadcastUpdate(updatedDocument); // Emit update to all clients
+      console.log('Broadcasting update:', updatedDocument);
+    } else {
+      res.status(404).send('Document not found');
+    }
+  } catch (error) {
+    console.error('Error updating document:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+// // GET route to last five chages
+// router.get('/client/tableData/:rowId/:columnName', async (req, res) => {
+//   const { rowId, columnName } = req.params;
+//   try {
+//     const client = await Client.findById(rowId).lean();
+//     if (!client) {
+//       return res.status(404).json({ message: 'Client not found' });
+//     }
+
+//     const columnData = client[columnName];
+//     if (!columnData || !Array.isArray(columnData)) {
+//       return res.status(404).json({ message: 'Column data not found or invalid format' });
+//     }
+
+//     const formattedData = columnData.flatMap(item => {
+//       return item.updated.map(update => ({
+//         timestamp: update.timestamp,
+//         value: item.value,
+//         newValue: update.newValue,
+//         loginBy: update.loginBy
+//       }));
+//     }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(1, 11);
+
+//     res.json(formattedData);
+//   } catch (err) {
+//     res.status(500).json({ message: err.message });
+//   }
+// });
+router.get('/client/tableData/:rowId/:columnName', async (req, res) => {
+  const { rowId, columnName } = req.params;
+  try {
+    const client = await Client.findById(rowId).lean();
+    if (!client) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    const columnData = client[columnName];
+    if (!columnData || !Array.isArray(columnData)) {
+      return res.status(404).json({ message: 'Column data not found or invalid format' });
+    }
+
+    const formattedData = columnData.flatMap(item => {
+      return item.updated.map(update => ({
+        timestamp: update.timestamp,
+        value: item.value,
+        newValue: update.newValue,
+        loginBy: update.loginBy,
+        caseNumber: update.caseNumber || '',
+        notes: update.notes || ''
+      }));
+    }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(1, 11);
+
+    res.json(formattedData);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+module.exports = router;
