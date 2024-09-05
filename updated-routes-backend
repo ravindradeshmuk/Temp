@@ -368,3 +368,53 @@ router.get('/client/tableData/:rowId/:columnName', async (req, res) => {
 });
 
 module.exports = router;
+####################################################################################################################
+// const mongoose = require('mongoose');
+// const Schema = mongoose.Schema;
+
+// const updatedSchema = new Schema({
+//   name: String,
+//   timestamp: String,
+//   loginBy: String,
+//   newValue: String,
+// });
+
+// const nestedObjectSchema = new Schema({
+//   value: String,
+//   updated: [updatedSchema],
+// });
+
+// const clientSchema = new Schema({
+//   selectedTracker: { type: String, required: true },
+// }, { strict: false }); // Enable strict: false to allow dynamic keys
+
+// const Client = mongoose.model('Client', clientSchema);
+
+// module.exports = Client;
+const mongoose = require('mongoose');
+const Schema = mongoose.Schema;
+
+// Updated Schema
+const updatedSchema = new Schema({
+  name: String,
+  timestamp: String,
+  loginBy: String,
+  newValue: String,
+  caseNumber: String,
+  notes: String
+});
+
+const nestedObjectSchema = new Schema({
+  value: String,
+  updated: [updatedSchema],
+  caseNumber: String,
+  notes: String
+});
+
+const clientSchema = new Schema({
+  selectedTracker: { type: String, required: true },
+}, { strict: false }); // Enable strict: false to allow dynamic keys
+
+const Client = mongoose.model('Client', clientSchema);
+
+module.exports = Client;
