@@ -1,0 +1,985 @@
+import React, { useContext, useState, useEffect, useRef } from 'react';
+import axios from 'axios';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import InfoIcon from '@mui/icons-material/Info';
+import {
+  StyledTable,
+  StyledTableContainer,
+  StyledTableCell,
+  StyledTableRow,
+  StyledButton,
+  StyledDialog,
+  StyledTextField,
+  StyledSelect,
+  StyledIconButton,
+
+} from './StyledComponents';
+import {
+ TableBody,TableHead, TableRow, Paper, MenuItem, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField,IconButton, Tooltip
+} from '@mui/material';
+
+import Box from '@mui/material/Box';
+import { useTheme } from '@mui/system';
+import useMediaQuery from '@mui/material/useMediaQuery';
+
+
+
+import { AuthContext } from "../Components/UserContext";
+;
+
+function TableComponent() {
+  const apiDomain = process.env.REACT_APP_API_DOMAIN;
+  const theme = useTheme();
+  const isSmallScreen = useMediaQuery(theme.breakpoints.down('sm'));
+  const { email: authEmail,role:authRole} = useContext(AuthContext);
+
+  const [tableData, setTableData] = useState([]);
+  const [tableHeadings, setTableHeadings] = useState([]);
+  const [isPopupOpen, setIsPopupOpen] = useState(false);
+  const [currentEditing, setCurrentEditing] = useState({ rowIndex: null, columnName: '' });
+  const [manualTime, setManualTime] = useState('');
+  const [previousData, setPreviousData] = useState([]);
+  const [loginBy, setLoginBy] = useState('current_user');
+  const [changeHistory, setChangeHistory] = useState([]);
+  const [isHistoryPopupOpen, setIsHistoryPopupOpen] = useState(false);
+  const [accessibleColumns, setAccessibleColumns] = useState([]);
+  const [dropdownOptions, setDropdownOptions] = useState({});
+  const [userRole, setUserRole] = useState('');
+  const [userTeam, setUserTeam] = useState('');
+  const [rolePermissions, setRolePermissions] = useState({});
+  const [preferenceColumns, setPreferenceColumns] = useState([]); // Preference-based access
+  const [ prefAccessible,setPreferenceAccessible]=useState([])
+  const [selectedTracker, setSelectedTracker] = useState('');
+  const [accessibleHeadings, setAccessibleHeadings] = useState([]); // Store filteredHeadings here
+  const [openPopup, setOpenPopup] = useState(false);
+  const [isCaseNotesPopupOpen, setIsCaseNotesPopupOpen] = useState(false);
+  const [currentCaseNotes, setCurrentCaseNotes] = useState({ caseNumber: '', notes: '' });
+
+const [popupData, setPopupData] = useState({ rowIndex: null, columnName: '', value: '', caseNumber: '', notes: '' });
+console.log('check heading of accessheading',accessibleHeadings)
+  // Ref to prevent re-triggering other effects
+  const hasFetchedUserData = useRef(false);
+  const hasFetchedUserPermissions = useRef(false);
+  const currentTime = new Date().toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+
+  const transformData = (data) => {
+    return data.map(item => {
+      const newItem = { ...item };
+      for (const key in newItem) {
+        if (newItem[key] && typeof newItem[key] === 'object' && 'value' in newItem[key]) {
+          newItem[key] = newItem[key].value;
+        } else if (newItem[key] && typeof newItem[key] === 'object') {
+          newItem[key] = JSON.stringify(newItem[key].value);
+        }
+      }
+      return newItem;
+    });
+  };
+
+  // Fetch table data every 5 seconds
+  const fetchData = async () => {
+    try {
+      const response = await axios.get(`${apiDomain}/client/data/api/tableData?includeId=true`);
+      if (response.status !== 200) throw new Error('Network response was not ok');
+
+      const rawData = response.data;
+      const transformedData = transformData(rawData);
+
+      if (transformedData.length > 0) {
+        const tracker = transformedData[0]["selectedTracker"];
+        setSelectedTracker((prevTracker) => {
+          if (prevTracker !== tracker) {
+            hasFetchedUserData.current = false;  // Reset to allow fetching when tracker changes
+          }
+          return tracker;
+        });
+      }
+
+      // Set table headings and data
+      const headings = transformedData.length > 0 ? Object.keys(transformedData[0]).filter(key => !['_id', '__v', 'Read Only', 'selectedTracker', 'Canceled Client'].includes(key)) : [];
+      setTableHeadings((prevHeadings) => {
+        if (JSON.stringify(prevHeadings) !== JSON.stringify(headings)) {
+          hasFetchedUserPermissions.current = false;  // Reset to allow fetching when headings change
+        }
+        return headings;
+      });
+
+      const readOnlyData = transformedData.filter(row => row["Read Only"] === "Yes" && row["selectedTracker"] === "scm");
+      const eastData = transformedData.filter(row => row["Time Zone Group"] === "E" && row["Read Only"] === "No" && row["selectedTracker"] === "scm");
+      const westData = transformedData.filter(row => row["Time Zone Group"] === "W" && row["Read Only"] === "No" && row["selectedTracker"] === "scm");
+
+      setTableData([
+        { specialRow: true, label: 'READ-ONLY CLIENTS, PATCHING WINDOW 11 PM to 1 AM ET', type: 'Read Only' },
+        ...readOnlyData,
+        { specialRow: true, label: 'EAST ZONE, PATCHING WINDOW 2 AM to 4 AM ET', type: 'east' },
+        ...eastData,
+        { specialRow: true, label: 'WEST ZONE, PATCHING WINDOW 4 AM to 6 AM ET', type: 'west' },
+        ...westData,
+      ]);
+
+      setPreviousData(transformedData);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+    const intervalId = setInterval(fetchData, 5000);
+    return () => clearInterval(intervalId);
+  }, []);
+
+
+
+   // Fetch user-specific data when selectedTracker changes
+   useEffect(() => {
+    if (selectedTracker && !hasFetchedUserData.current) {
+      const fetchUserData = async () => {
+      try {
+        const response = await axios.get(`${apiDomain}/client/data/api/userdata`);
+        const usersData = response.data;
+
+        const currentUserData = usersData.find(user => user.email === authEmail);
+        if (currentUserData) {
+          const { role, preference, firstName, lastName, loginHistory,team } = currentUserData;
+          setLoginBy(`${firstName} ${lastName}`);
+          if (loginHistory && loginHistory.length > 0) {
+            console.log('Last login:', loginHistory[loginHistory.length - 1]);
+          }
+            // Use firstName and lastName from the matched user
+            setLoginBy(`${firstName} ${lastName}`);
+            console.log(firstName, lastName);
+            setUserRole(role);
+            setUserTeam(team);
+
+          const filteredPreferences = preference.filter(pref => pref.product === selectedTracker);
+          setPreferenceAccessible(filteredPreferences);
+
+          const accessibleCols = tableHeadings.map(heading => ({
+            heading,
+            editable: rolePermissions[heading]?.[role] || false,
+          }));
+          setRolePermissions(accessibleCols);
+
+          const accessiblePrefs = tableHeadings.map(heading => ({
+            heading,
+            visible: filteredPreferences.some(pref => pref.headings.includes(heading)),
+          }));
+          setPreferenceColumns(accessiblePrefs);
+        } else {
+          console.log('No matching user found.');
+        }
+      } catch (error) {
+        console.error('Error fetching user data:', error);
+      }
+    };
+
+    if (selectedTracker) {
+      fetchUserData();
+    }
+    hasFetchedUserData.current = true;
+    }
+  }, [selectedTracker, authEmail, tableHeadings]);
+   // Fetch role-based permissions
+   useEffect(() => {
+    if (tableHeadings.length > 0 && !hasFetchedUserPermissions.current) {
+      const fetchUserPermissions = async () => {
+        try {
+          const response = await axios.get(`${apiDomain}/api/status/heading-product-team-role`);
+          const roleData = response.data;
+
+          const rolePermissions = roleData.reduce((acc, item) => {
+            if (!acc[item.heading]) acc[item.heading] = {};
+            acc[item.heading][item.role] = true;
+            return acc;
+          }, {});
+
+          setRolePermissions(rolePermissions);
+
+          if (authRole === 'admin_role') {
+            setAccessibleColumns(tableHeadings.map(heading => ({ heading, editable: true })));
+          } else {
+            const accessibleCols = tableHeadings.map(heading => ({
+              heading,
+              editable: rolePermissions[heading]?.[authRole] || false,
+            }));
+            setAccessibleColumns(accessibleCols);
+          }
+        } catch (error) {
+          console.error('Error fetching role permissions:', error);
+        }
+      };
+
+      fetchUserPermissions();
+      hasFetchedUserPermissions.current = true;
+    }
+  }, [authRole, tableHeadings,apiDomain]);
+
+
+  
+  useEffect(() => {
+    if (tableHeadings.length > 7) {
+        const fetchDropdownOptions = async (heading) => {
+            try {
+                const response = await axios.get(`${apiDomain}/api/status/status-options`, {
+                    params: { product: 'scm', heading }
+                });
+                if (response.status === 200) {
+                    return response.data; // This should be the array of status options
+                } else {
+                    console.error('Failed to fetch dropdown options:', response.status);
+                    return [];
+                }
+            } catch (error) {
+                console.error('Error fetching dropdown options:', error);
+                return [];
+            }
+        };
+
+        const fetchAllDropdownOptions = async () => {
+            const headingsOptions = {};
+            const relevantHeadings = tableHeadings.slice(7).filter(heading => {
+                return !dropdownOptions[heading]; // Fetch options only if they are not already fetched
+            });
+
+            for (const heading of relevantHeadings) {
+                const options = await fetchDropdownOptions(heading);
+                headingsOptions[heading] = options;
+            }
+
+            setDropdownOptions(prevOptions => ({ ...prevOptions, ...headingsOptions }));
+        };
+
+        fetchAllDropdownOptions();
+    }
+}, [tableHeadings]); // Runs only when tableHeadings changes
+
+
+ useEffect(() => {
+    if (prefAccessible.length > 0) {
+      const filteredHeadings = prefAccessible.reduce((acc, pref) => {
+        const matchedHeadings = pref.headings.filter(heading =>
+          tableHeadings.includes(heading)
+        );
+
+        if (matchedHeadings.length > 0) {
+          acc.push(...matchedHeadings);
+        }
+
+        return acc;
+      }, []);
+
+      setAccessibleHeadings(filteredHeadings); // Save to state
+    }
+  }, [prefAccessible, tableHeadings]);
+
+
+  
+
+  const handleDropdownChange = async (event, rowIndex, columnName) => {
+    const value = event.target.value;
+    const newData = [...tableData];
+    const row = newData[rowIndex];
+    const isCanceledClient = row["Canceled Client"] === "Yes";
+  
+    if (isCanceledClient) {
+      // If the client is canceled, set all dropdowns to 'Cancelled'
+      tableHeadings.forEach(heading => {
+        if (shouldRenderDropdown(tableHeadings.indexOf(heading))) {
+          updateCellValue(row, heading, 'Cancelled', 'System');
+        }
+      });
+      setTableData(newData);
+      await sendUpdateToServer(row, columnName, 'Cancelled', true);
+    } else {
+      // If the client is not canceled, check if we need to open a popup
+      if (value === 'Delayed' || value === 'Issue Detected') {
+        setPopupData({ rowIndex, columnName, value, caseNumber: '', notes: '' });
+        setOpenPopup(true);
+      } else {
+        // Otherwise, proceed with the normal update
+        updateCellValue(row, columnName, value, loginBy);
+        setTableData(newData);
+        await sendUpdateToServer(row, columnName, value, false);
+      }
+    }
+  };
+  
+  const handlePopupSubmit = async () => {
+    const { rowIndex, columnName, value, caseNumber, notes } = popupData;
+    
+    if (!caseNumber || !notes) {
+      alert('Please fill in both the case number and notes.');
+      return;
+    }
+  
+    const newData = [...tableData];
+    const row = newData[rowIndex];
+    
+    updateCellValue(row, columnName, value ,loginBy, caseNumber, notes);
+    setTableData(newData);
+    await sendUpdateToServer(row, columnName, value, false, caseNumber, notes);
+    setOpenPopup(false);
+  };
+  
+  const updateCellValue = (row, columnName, value, updatedBy, caseNumber = '', notes = '') => {
+    const currentTime = new Date().toISOString();
+    const updateObject = {
+      name: row["Site Name"],
+      timestamp: currentTime,
+      loginBy: updatedBy,
+      newValue: value
+    };
+  
+    if (Array.isArray(row[columnName])) {
+      const obj = row[columnName].find((obj) => obj.value === 'pending');
+      if (obj) {
+        obj.value = value;
+        obj.updated.push(updateObject);
+        if (caseNumber && notes) {
+          obj.caseNumber = caseNumber;
+          obj.notes = notes;
+        }
+      } else {
+        row[columnName].push({
+          value: value,
+          updated: [updateObject],
+          caseNumber: caseNumber,
+          notes: notes
+        });
+      }
+    } else if (typeof row[columnName] === 'object' && row[columnName] !== null) {
+      row[columnName].value = value;
+      if (!Array.isArray(row[columnName].updated)) {
+        row[columnName].updated = [];
+      }
+      row[columnName].updated.push(updateObject);
+      if (caseNumber && notes) {
+        row[columnName].caseNumber = caseNumber;
+        row[columnName].notes = notes;
+      }
+    } else {
+      row[columnName] = {
+        value: value,
+        updated: [updateObject],
+        caseNumber: caseNumber,
+        notes: notes
+      };
+    }
+  };
+  
+  const sendUpdateToServer = async (row, columnName, value, isCanceled, caseNumber = '', notes = '') => {
+    try {
+      const payload = {
+        clientName: row["Site Name"],
+        columnName,
+        currentTime: currentTime,
+        newValue: value,
+        loginBy: loginBy, // Replace with actual user info
+        isCanceled: isCanceled,
+        caseNumber: caseNumber,
+        notes: notes
+      };
+      const response = await axios.patch(
+        `${apiDomain}/client/data/updateClientData/${row._id}`,
+        payload
+      );
+      if (response.status !== 200) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      console.log('Data updated successfully:', response.data);
+    } catch (error) {
+      console.error('Error updating data:', error);
+    }
+  };
+
+  const handleOpenPopup = (rowIndex, columnName) => {
+
+    setCurrentEditing({ rowIndex, columnName });
+    setIsPopupOpen(true);
+  };
+
+  const handleClosePopup = () => {
+    setIsPopupOpen(false);
+    setManualTime('');
+  };
+
+
+
+  const handleSaveManualTime = async () => {
+    if (!manualTime.match(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)) {
+      alert("Please enter a valid time in HH:MM format.");
+      return;
+    }
+
+    const { rowIndex, columnName } = currentEditing;
+    if (rowIndex != null && columnName) {
+      // Update the local state
+      const newData = [...tableData];
+      const rowId = newData[rowIndex]._id;
+      newData[rowIndex][columnName] = manualTime;
+      setTableData(newData);
+
+      // Reset the manual time input for the next use
+      setManualTime('');
+
+      try {
+        // Update the database
+        const response = await axios.patch(`${apiDomain}/client/data/updateTime/${rowId}`, {
+          [columnName]: manualTime, // Dynamically sets the field to update
+        });
+        if (response.status === 200) {
+          console.log('Time updated successfully:', response.data);
+        } else {
+          throw new Error(`Failed to update time. Status code: ${response.status}`);
+        }
+      } catch (error) {
+        console.error('Error updating time:', error);
+      }
+      handleClosePopup();
+    }
+  };
+
+  const handleSaveTime = async () => {
+    const currentTime = new Date().toLocaleTimeString('en-US', {
+      timeZone: 'America/New_York',
+      hour12: false,
+      hour: '2-digit',  // 2-digit hour
+      minute: '2-digit' // 2-digit minute
+    });
+    const { rowIndex, columnName } = currentEditing;
+    if (rowIndex != null && columnName) {
+      const newData = [...tableData];
+      const rowId = newData[rowIndex]._id;
+      newData[rowIndex][columnName] = currentTime;
+      setTableData(newData);
+      try {
+        const response = await axios.patch(`${apiDomain}/client/data/updateTime/${rowId}`, {
+          [columnName]: currentTime, // Dynamically sets the field to update
+        });
+        if (response.status === 200) {
+          console.log('Time updated successfully:', response.data);
+        } else {
+          throw new Error(`Failed to update time. Status code: ${response.status}`);
+        }
+      } catch (error) {
+        console.error('Error updating time:', error);
+      }
+      handleClosePopup();
+    }
+  };
+
+
+  // const handleTimeChange = (event, rowIndex, columnName) => {
+  //   const newData = [...tableData];
+  //   newData[rowIndex][columnName] = event.target.value;
+  //   setTableData(newData);
+  // };
+  // const handleOpenHistoryPopup = async (rowId, columnName) => {
+  //   try {
+  //     const response = await axios.get(`${apiDomain}/client/data/client/tableData/${rowId}/${columnName}`);
+  //     if (response.status !== 200) throw new Error('Failed to fetch change history');
+  //     setChangeHistory(response.data);
+  //     setIsHistoryPopupOpen(true);
+  //   } catch (error) {
+  //     console.error('Error fetching change history:', error);
+  //   }
+  // };
+
+  const handleOpenHistoryPopup = async (rowId, columnName) => {
+    try {
+      const response = await axios.get(`${apiDomain}/client/data/client/tableData/${rowId}/${columnName}`);
+
+      if (response.status === 200 && response.data.length > 0) {
+        // Show only the last 5 changes
+        const lastFiveChanges = response.data.slice(-10);
+        setChangeHistory(lastFiveChanges);
+        setIsHistoryPopupOpen(true);
+      } else {
+        setChangeHistory([]); // No history available
+        setIsHistoryPopupOpen(true);
+      }
+    } catch (error) {
+      console.error('Error fetching change history:', error);
+      setChangeHistory([]); // On error, show no history
+      setIsHistoryPopupOpen(true);
+    }
+  };
+
+  const handleCloseHistoryPopup = () => {
+    setIsHistoryPopupOpen(false);
+    setChangeHistory([]);
+  };
+ 
+  const handleOpenCaseNotesPopup = (caseNumber, notes) => {
+    setCurrentCaseNotes({ caseNumber, notes });
+    setIsCaseNotesPopupOpen(true);
+  };
+
+  const handleCloseCaseNotesPopup = () => {
+    setIsCaseNotesPopupOpen(false);
+  };
+
+  const isHeadingVisible = heading => {
+    if (authRole === 'admin_role') {
+      return true;
+    }
+
+    const roleAccessible = accessibleColumns.find(col => col.heading === heading)?.editable;
+    const prefAccessible = preferenceColumns.find(col => col.heading === heading)?.visible;
+
+    return roleAccessible || prefAccessible;
+  };
+
+  const isHeadingEditable = heading => {
+    if (authRole === 'admin_role') {
+      return true;
+    }
+
+    const roleAccessible = accessibleColumns.find(col => col.heading === heading)?.editable;
+    const isPreferenceVisible = accessibleHeadings.includes(heading);
+
+    return roleAccessible && isPreferenceVisible;
+  };
+  
+
+  
+  // Debugging output
+  // console.log('preferenceColumns:', preferenceColumns);
+  console.log('authRole:', authRole);
+   console.log('rolePermissions:', rolePermissions);
+  console.log('prefAccessible:', prefAccessible);
+  const shouldRenderDropdown = (index) => {
+    // if (dropdownOptions[tableHeadings] && dropdownOptions[tableHeadings].requiredRole === userRole) {
+    //   return true;
+    // }
+    // return false;
+    // Logic to determine if a dropdown should be rendered based on index
+    return index >= 7 && index < 24; // Example condition
+  };
+  // const unauthorizedAccessStyle = {
+  //   color: 'red',
+  //   cursor: 'not-allowed',
+  //   textAlign: 'center',
+  //   padding: '10px',
+  //   fontWeight: 'bold',
+  // };
+
+
+  //const alphabetHeaders = Array.from({ length: tableHeadings.length }, (_, i) => String.fromCharCode(65 + i));
+
+  // Function to dynamically apply header cell style based on column name
+  const getHeaderCellStyle = (heading) => {
+    switch (heading) {
+      case 'Monitoring Alerts Validation':
+      case 'Monitoring ISS/E-Link Validation':
+      case 'Maintenance Mode Disabled':
+        return { backgroundColor: '#F56E7B', color: '#000000', fontWeight: 'bold', textAlign: 'center', border: '1px solid black', padding: "1px" };
+      case 'DB Validation':
+        return { backgroundColor: '#707CF1', color: '#000000', fontWeight: 'bold', textAlign: 'center', border: '1px solid black', padding: "1px" }; // Check this color, seems like a typo
+      case 'SCM App Validation':
+        return { backgroundColor: '#00BBBA', color: '#000000', fontWeight: 'bold', textAlign: 'center', border: '1px solid black', padding: "1px" };
+      default:
+        return { backgroundColor: '#151744', color: 'white', fontWeight: 'bold', textAlign: 'center', border: '1px solid black', padding: "1px" }; // Default style for other headers
+    }
+  };
+
+  const renderDropdownValue = (valueObj) => {
+    const value = valueObj.value || valueObj;
+    const style = {
+      color: value === 'Completed' ? 'green' : value === 'Issue Detected' ? 'red' : 'default',
+      minWidth: 10,
+    };
+    return <div style={style}>{value}</div>;
+  };
+
+  const renderCellValue = (value) => {
+    if (value && typeof value === 'object') {
+      if ('value' in value) {
+        return value.value; // Render the 'value' property if it exists
+      } else {
+        // Render a stringified version of the object for debugging purposes
+        return JSON.stringify(value);
+      }
+    }
+    return value; // If it's a primitive value, render it directly
+  };
+
+  const handleManualTimeChange = (e) => {
+    const value = e.target.value;
+    // Allow only numbers and a single colon
+    if (/^[0-9]{0,2}:[0-9]{0,2}$/.test(value) || /^[0-9]{0,2}$/.test(value) || /^[0-9]{0,2}:[0-9]{0,2}$/.test(value + ':')) {
+      setManualTime(value);
+    }
+  };
+
+  const handleManualTimeBlur = () => {
+    let [hours, minutes] = manualTime.split(':');
+    hours = hours || '00';
+    minutes = minutes || '00';
+
+    if (hours.length === 1) hours = '0' + hours;
+    if (minutes.length === 1) minutes = '0' + minutes;
+
+    const formattedTime = `${hours}:${minutes}`;
+    setManualTime(formattedTime);
+  };
+
+
+  const siteNameIndex = tableHeadings.findIndex(heading => heading === "Site Name");
+  const dataCenterIndex = tableHeadings.findIndex(heading => heading === "Data Center");
+  let eastCounter = 1;
+  let westCounter = 1;
+  let readOnlyCounter = 1;
+  
+  return (
+    <>
+ <StyledTableContainer component={Paper}>
+  <h1>SCM Tracker:</h1>
+  <StyledTable aria-label="customized table">
+    <TableHead>
+      <TableRow>
+        <StyledTableCell>#</StyledTableCell>
+        {tableHeadings.map((heading, index) =>
+          isHeadingVisible(heading) ? (
+            <StyledTableCell
+              key={index}
+              style={getHeaderCellStyle(heading)}
+              className={
+                index === siteNameIndex || index === dataCenterIndex ? 'stickyColumn' : ''
+              }
+            >
+              {heading}
+            </StyledTableCell>
+          ) : null
+        )}
+      </TableRow>
+    </TableHead>
+    <TableBody>
+    {tableData.map((row, rowIndex) => {
+              if (row.specialRow) {
+                if (row.type === 'east') eastCounter = 1;
+                else if (row.type === 'west') westCounter = 1;
+                else if (row.type === 'Read Only') readOnlyCounter = 1;
+                return (
+                  <StyledTableRow key={`special-${row.type}-${rowIndex}`} className="specialRow">
+                    <StyledTableCell colSpan={tableHeadings.length + 1} className="specialRowLabel">
+                      {row.label}
+                    </StyledTableCell>
+                  </StyledTableRow>
+                );
+              } else {
+                const isReadOnlyRow = row["Read Only"] === "Yes";
+                let currentCounter;
+                if (isReadOnlyRow) {
+                  currentCounter = readOnlyCounter++;
+                } else {
+                  currentCounter = row["Time Zone Group"] === "E" ? eastCounter++ : westCounter++;
+                }
+                const isCanceledClient = row["Canceled Client"] === "Yes";
+
+          return (
+            <StyledTableRow
+              key={row._id}
+              className={isCanceledClient ? 'canceledRow' : ''}
+            >
+              <StyledTableCell>{currentCounter}</StyledTableCell>
+              {tableHeadings.map((heading, columnIndex) => {
+                const visible = isHeadingVisible(heading);
+                const editable = isHeadingEditable(heading);
+
+                const isTimeInputColumn =
+                  heading === 'SCM App Group 2 - Complete (Enter EST Time in 24h format)' ||
+                  heading === 'Patch Reboots Complete (Enter EST Time in 24h format)';
+                const isDropdown = shouldRenderDropdown(columnIndex);
+                const isComplianceDropdown =
+                  heading === 'Azure Gold Image Compliance Status';
+                const isSiteNameColumn =
+                  columnIndex === siteNameIndex || columnIndex === dataCenterIndex;
+                const fieldClassName = !editable ? 'disabledSelect' : '';
+
+                return visible ? (
+                  <StyledTableCell
+                    key={columnIndex}
+                    // className={isSiteNameColumn ? 'stickyColumn' : ''}
+                    className={columnIndex === siteNameIndex || columnIndex === dataCenterIndex ? 'stickyColumn' : ''}
+        
+                  >
+                    {isTimeInputColumn ? (
+                      <StyledButton
+                        onClick={
+                          editable && !isCanceledClient
+                            ? () => handleOpenPopup(rowIndex, heading)
+                            : null
+                        }
+                        className={`inputTime ${fieldClassName}`}
+                        disabled={!editable || isCanceledClient}
+                      >
+                        {row[heading] ? row[heading] : 'Set Time'}
+                      </StyledButton>
+                    ) : isDropdown || isComplianceDropdown ? (
+                      <Box className="dropdownContainer" style={{ display: 'flex', flexDirection: 'row' }}>
+                        <StyledSelect
+                          // value={row[heading] || 'Pending'}
+                          value={isCanceledClient ? 'Cancelled' : (row[heading] || 'Pending')}
+
+                          onChange={
+                            editable && !isCanceledClient
+                              ? event => handleDropdownChange(event, rowIndex, heading)
+                              : null
+                          }
+                          className={`select ${fieldClassName}`}
+                          IconComponent={KeyboardArrowDownIcon}
+                          renderValue={value => renderDropdownValue(value)}
+                          disabled={!editable || isCanceledClient}
+                        >
+                           {isCanceledClient ? (
+                                <MenuItem value="Cancelled">Cancelled</MenuItem>
+                              ) : (
+                                dropdownOptions[heading]?.map((option, optionIndex) => (
+                                  <MenuItem
+                                    key={optionIndex}
+                                    value={option}
+                                    style={{
+                                      color:
+                                        option === 'Completed'
+                                          ? 'green'
+                                          : option === 'Issue Detected'
+                                          ? 'red'
+                                          : 'default',
+                                    }}
+                                  >
+                                    {option}
+                                  </MenuItem>
+                                ))
+                              )}
+                            </StyledSelect>
+                            <StyledIconButton
+                              className={`infoButton ${fieldClassName}`}
+                              onClick={() => handleOpenHistoryPopup(row._id, heading)}
+                              disabled={!editable || isCanceledClient}
+                            >
+                              <InfoIcon />
+                            </StyledIconButton>
+                          </Box>
+                        ) : (
+                          renderCellValue(row[heading])
+                        )}
+                      </StyledTableCell>
+                    ) : null;
+                  })}
+                </StyledTableRow>
+              );
+            }
+          })}
+        </TableBody>
+      </StyledTable>
+    </StyledTableContainer>
+<Dialog open={openPopup} onClose={() => setOpenPopup(false)}>
+        <DialogTitle>{popupData.value === 'Delayed' ? 'Delay Details' : 'Issue Details'}</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="Case Number"
+            type="text"
+            fullWidth
+            value={popupData.caseNumber}
+            onChange={(e) => setPopupData({...popupData, caseNumber: e.target.value})}
+            required
+          />
+          <TextField
+            margin="dense"
+            label="Notes"
+            multiline
+            rows={4}
+            fullWidth
+            value={popupData.notes}
+            onChange={(e) => setPopupData({...popupData, notes: e.target.value})}
+            required
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpenPopup(false)}>Cancel</Button>
+          <Button onClick={handlePopupSubmit}>Submit</Button>
+        </DialogActions>
+      </Dialog>
+   
+      <StyledDialog open={isPopupOpen} onClose={handleClosePopup}>
+        <DialogActions className="inputContainer">
+          <StyledTextField
+            className="timeInput"
+            type="text"
+            value={manualTime}
+            onChange={handleManualTimeChange}
+            onBlur={handleManualTimeBlur}
+            placeholder="HH:MM"
+            InputLabelProps={{
+              shrink: true,
+            }}
+          />
+          <StyledButton onClick={handleSaveManualTime} color="primary" className="buttonsave">
+            Save
+          </StyledButton>
+          <StyledButton onClick={handleSaveTime} color="primary" className="button">
+            Set Current Time EST
+          </StyledButton>
+          <StyledButton onClick={handleClosePopup} color="secondary">
+            Cancel
+          </StyledButton>
+        </DialogActions>
+      </StyledDialog>
+      <StyledDialog open={isHistoryPopupOpen} onClose={handleCloseHistoryPopup}>
+        <DialogTitle>Change History</DialogTitle>
+        <DialogContent className="dialogContent">
+          {changeHistory.length > 0 ? (
+            <StyledTable>
+              <TableHead>
+                <TableRow>
+                  <StyledTableCell>Date/Time</StyledTableCell>
+                  <StyledTableCell>Status</StyledTableCell>
+                  <StyledTableCell>Changed By</StyledTableCell>
+                  <StyledTableCell>Issue</StyledTableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {changeHistory.map((change, index) => (
+                  <StyledTableRow key={index}>
+                    <StyledTableCell style={{ fontWeight: 'normal' }}>{change.timestamp}</StyledTableCell>
+                    <StyledTableCell style={{ fontWeight: 'normal' }}>{change.value}</StyledTableCell>
+                    <StyledTableCell style={{ fontWeight: 'normal' }}>{change.loginBy}</StyledTableCell>
+                    <StyledTableCell>
+                      {change.caseNumber && change.notes && (
+                        <Tooltip title="View Case Number and Notes">
+                          <IconButton onClick={() => handleOpenCaseNotesPopup(change.caseNumber, change.notes)}>
+                            <InfoIcon size={20} />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                    </StyledTableCell>
+                  </StyledTableRow>
+                ))}
+              </TableBody>
+            </StyledTable>
+          ) : (
+            <div>No change history available.</div>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <StyledButton onClick={handleCloseHistoryPopup} color="primary">
+            Close
+          </StyledButton>
+        </DialogActions>
+      </StyledDialog>
+
+      <Dialog open={isCaseNotesPopupOpen} onClose={handleCloseCaseNotesPopup}>
+        <DialogTitle>Case Details</DialogTitle>
+        <DialogContent>
+          <p><strong>Case Number:</strong> {currentCaseNotes.caseNumber}</p>
+          <p><strong>Notes:</strong> {currentCaseNotes.notes}</p>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseCaseNotesPopup} color="primary">
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
+   
+    </>
+  );
+}
+
+export default TableComponent;
+#################################################################################################
+router.patch('/updateClientData/:id', async (req, res) => {
+  const { id } = req.params;
+  const { clientName, columnName, newValue, loginBy, currentTime, caseNumber, notes, isCanceled } = req.body;
+  
+  try {
+    const client = await Client.findById(id);
+    if (!client) {
+      return res.status(404).send({ message: 'Client not found' });
+    }
+
+    const updateObject = {
+      name: clientName,
+      timestamp: currentTime,
+      loginBy: loginBy,
+      newValue: newValue,
+      caseNumber: caseNumber || '',
+      notes: notes || ''
+    };
+
+    if (isCanceled) {
+      // Update all columns to 'Cancelled' for cancelled clients
+      Object.keys(client._doc).forEach(key => {
+        if (key !== '_id' && key !== '__v' && key !== 'Canceled Client') {
+          updateColumn(client, key, 'Cancelled', updateObject);
+        }
+      });
+    } else {
+      // Update only the specified column
+      if (!client[columnName]) {
+        return res.status(400).send({ message: `Column ${columnName} not found` });
+      }
+      updateColumn(client, columnName, newValue, updateObject);
+    }
+    
+    client.markModified(columnName);
+    await client.save();
+    res.status(200).send({ message: 'Client updated successfully', client });
+  } catch (error) {
+    console.error('Error updating client:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+function updateColumn(client, columnName, newValue, updateObject) {
+  const column = client[columnName];
+  
+  if (Array.isArray(column)) {
+    const objIndex = column.findIndex((obj) => obj.value === 'pending');
+    if (objIndex !== -1) {
+      column[objIndex].value = newValue;
+      column[objIndex].updated.push(updateObject);
+      if (updateObject.caseNumber && updateObject.notes) {
+        column[objIndex].caseNumber = updateObject.caseNumber;
+        column[objIndex].notes = updateObject.notes;
+      }
+    } else {
+      column.push({
+        value: newValue,
+        updated: [updateObject],
+        caseNumber: updateObject.caseNumber,
+        notes: updateObject.notes
+      });
+    }
+  } else if (typeof column === 'object' && column !== null) {
+    column.value = newValue;
+    if (!Array.isArray(column.updated)) {
+      column.updated = [];
+    }
+    column.updated.push(updateObject);
+    if (updateObject.caseNumber && updateObject.notes) {
+      column.caseNumber = updateObject.caseNumber;
+      column.notes = updateObject.notes;
+    }
+  } else {
+    client[columnName] = {
+      value: newValue,
+      updated: [updateObject],
+      // caseNumber: updateObject.caseNumber,
+      // notes: updateObject.notes
+    };
+  }
+  client.markModified(columnName);
+}
