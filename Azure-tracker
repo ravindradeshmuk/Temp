@@ -1,0 +1,320 @@
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import InfoIcon from '@mui/icons-material/Info';
+import {
+  StyledTable,
+  StyledTableContainer,
+  StyledTableCell,
+  StyledTableRow,
+  StyledButton,
+  StyledDialog,
+  StyledTextField,
+  StyledSelect,
+  StyledIconButton,
+} from './StyledComponents';
+import Paper from '@mui/material/Paper';
+import TableBody from '@mui/material/TableBody';
+import TableHead from '@mui/material/TableHead';
+import TableRow from '@mui/material/TableRow';
+import MenuItem from '@mui/material/MenuItem';
+import Box from '@mui/material/Box';
+import { useTheme } from '@mui/system';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogTitle from '@mui/material/DialogTitle';
+
+function TableComponent() {
+  const apiDomain = process.env.REACT_APP_API_DOMAIN;
+  const theme = useTheme();
+  const isSmallScreen = useMediaQuery(theme.breakpoints.down('sm'));
+
+  const [tableData, setTableData] = useState([]);
+  const [tableHeadings, setTableHeadings] = useState([]);
+  const [isPopupOpen, setIsPopupOpen] = useState(false);
+  const [currentEditing, setCurrentEditing] = useState({ rowIndex: null, columnName: '' });
+  const [manualTime, setManualTime] = useState('');
+  const [loginBy, setLoginBy] = useState('current_user');
+  const [changeHistory, setChangeHistory] = useState([]);
+  const [isHistoryPopupOpen, setIsHistoryPopupOpen] = useState(false);
+
+  const currentTime = new Date().toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+
+  // Fetch data function with Azure filter
+  const fetchData = async () => {
+    try {
+      const response = await axios.get(`${apiDomain}/azure/client/api/azure/tableData?includeId=true`);
+      if (response.status !== 200) throw new Error('Network response was not ok');
+
+      const rawData = response.data;
+
+      // Filter for azure selected tracker
+      const azureData = rawData.filter((row) => row.selectedTracker === 'azure');
+
+      const headings = azureData.length > 0
+        ? Object.keys(azureData[0]).filter(key => !['_id', '__v', 'Read Only', 'selectedTracker', 'Canceled Client'].includes(key))
+        : [];
+
+      setTableHeadings(headings);
+      setTableData(azureData);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+    const intervalId = setInterval(fetchData, 5000);
+    return () => clearInterval(intervalId);
+  }, []);
+
+  const handleDropdownChange = async (event, rowIndex, columnName) => {
+    const value = event.target.value;
+    const newData = [...tableData];
+    const rowId = newData[rowIndex]._id;
+
+    newData[rowIndex][columnName] = value;
+    setTableData(newData);
+
+    try {
+      const payload = {
+        clientName: newData[rowIndex]["Site Name"],
+        columnName,
+        currentTime,
+        newValue: value,
+        loginBy,
+      };
+
+      const response = await axios.patch(
+        `${apiDomain}/client/data/updateClientData/${rowId}`,
+        payload
+      );
+
+      if (response.status !== 200) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      console.log('Data updated successfully:', response.data);
+    } catch (error) {
+      console.error('Error updating data:', error);
+    }
+  };
+
+  const handleOpenPopup = (rowIndex, columnName) => {
+    setCurrentEditing({ rowIndex, columnName });
+    setIsPopupOpen(true);
+  };
+
+  const handleClosePopup = () => {
+    setIsPopupOpen(false);
+    setManualTime('');
+  };
+
+  const handleSaveManualTime = async () => {
+    if (!manualTime.match(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)) {
+      alert("Please enter a valid time in HH:MM format.");
+      return;
+    }
+
+    const { rowIndex, columnName } = currentEditing;
+    if (rowIndex != null && columnName) {
+      const newData = [...tableData];
+      const rowId = newData[rowIndex]._id;
+      newData[rowIndex][columnName] = manualTime;
+      setTableData(newData);
+      setManualTime('');
+
+      try {
+        const response = await axios.patch(`${apiDomain}/client/data/updateTime/${rowId}`, {
+          [columnName]: manualTime,
+        });
+        if (response.status === 200) {
+          console.log('Time updated successfully:', response.data);
+        } else {
+          throw new Error(`Failed to update time. Status code: ${response.status}`);
+        }
+      } catch (error) {
+        console.error('Error updating time:', error);
+      }
+      handleClosePopup();
+    }
+  };
+
+  const handleSaveTime = async () => {
+    const { rowIndex, columnName } = currentEditing;
+    if (rowIndex != null && columnName) {
+      const newData = [...tableData];
+      const rowId = newData[rowIndex]._id;
+      newData[rowIndex][columnName] = currentTime;
+      setTableData(newData);
+
+      try {
+        const response = await axios.patch(`${apiDomain}/client/data/updateTime/${rowId}`, {
+          [columnName]: currentTime,
+        });
+        if (response.status === 200) {
+          console.log('Time updated successfully:', response.data);
+        } else {
+          throw new Error(`Failed to update time. Status code: ${response.status}`);
+        }
+      } catch (error) {
+        console.error('Error updating time:', error);
+      }
+      handleClosePopup();
+    }
+  };
+
+  const dropdownOptions = [
+    'Pending', 'Started', 'In Progress', 'Delayed',
+    'Issue Detected', 'Completed', 'NA', 'Canceled'
+  ];
+
+  const complianceOptions = [
+    'Pending', 'Compliant', 'Non Compliant', 'NA'
+  ];
+
+  const shouldRenderDropdown = (index) => index >= 5   && index < 23;
+
+  const renderCellValue = (value) => (typeof value === 'object' && value !== null) ? value.value || JSON.stringify(value) : value;
+
+  const siteNameIndex = tableHeadings.findIndex(heading => heading === "Site Name");
+
+  return (
+    <>
+      <StyledTableContainer component={Paper}>
+        <StyledTable aria-label="customized table">
+          <TableHead>
+            <TableRow>
+              <StyledTableCell>#</StyledTableCell>
+              {tableHeadings.map((heading, index) => (
+                <StyledTableCell
+                  key={index}
+                  className={index === siteNameIndex ? 'stickyColumn' : ''}
+                >
+                  {heading}
+                </StyledTableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {tableData.map((row, rowIndex) => (
+              <StyledTableRow key={row._id}>
+                <StyledTableCell>{rowIndex + 1}</StyledTableCell>
+                {tableHeadings.map((heading, columnIndex) => (
+                  <StyledTableCell key={columnIndex}>
+                    {shouldRenderDropdown(columnIndex) ? (
+                      <Box className="dropdownContainer">
+                        <StyledSelect
+                          value={row[heading] || 'Pending'}
+                          onChange={(event) => handleDropdownChange(event, rowIndex, heading)}
+                          IconComponent={KeyboardArrowDownIcon}
+                        >
+                          {dropdownOptions.map((option, optionIndex) => (
+                            <MenuItem key={optionIndex} value={option}>
+                              {option}
+                            </MenuItem>
+                          ))}
+                        </StyledSelect>
+                        <StyledIconButton onClick={() => handleOpenPopup(rowIndex, heading)}>
+                          <InfoIcon />
+                        </StyledIconButton>
+                      </Box>
+                    ) : (
+                      renderCellValue(row[heading])
+                    )}
+                  </StyledTableCell>
+                ))}
+              </StyledTableRow>
+            ))}
+          </TableBody>
+        </StyledTable>
+      </StyledTableContainer>
+
+      <StyledDialog open={isPopupOpen} onClose={handleClosePopup}>
+        <DialogActions>
+          <StyledTextField
+            type="text"
+            value={manualTime}
+            onChange={(e) => setManualTime(e.target.value)}
+            placeholder="HH:MM"
+          />
+          <StyledButton onClick={handleSaveManualTime}>Save</StyledButton>
+          <StyledButton onClick={handleSaveTime}>Set Current Time</StyledButton>
+          <StyledButton onClick={handleClosePopup} color="secondary">
+            Cancel
+          </StyledButton>
+        </DialogActions>
+      </StyledDialog>
+    </>
+  );
+}
+
+export default TableComponent;
+#####################################################################################
+ // API route to fetch and reorder client data
+router.get('/api/azure/tableData', async (req, res) => {
+  try {
+    const includeId = req.query.includeId === 'true';
+
+    // Fetch all clients from the database, exclude _id if needed
+    const clients = await Client.find({}, includeId ? '' : '-_id');
+
+    if (clients.length === 0) {
+      return res.json([]); // If no data, return an empty array
+    }
+
+    // Function to extract the last updated value from an array or return the original value if it's not an array
+    const getLastUpdatedValue = (value) => {
+      if (Array.isArray(value) && value.length > 0) {
+        // Assuming the last entry in the array is the most recent
+        const lastEntry = value[value.length - 1];
+        return lastEntry.value || lastEntry; // Return the value if nested, or the last entry itself
+      }
+      return value; // Return the value if not an array
+    };
+
+    // Function to reorder an object based on the given dynamic order
+    const reorderKeys = (obj, order) => {
+      const orderedObj = {};
+      order.forEach(key => {
+        if (obj[key] !== undefined) {
+          orderedObj[key] = obj[key];
+        }
+      });
+      return orderedObj;
+    };
+
+    // Get the order of keys from the first client document
+    const firstClientObj = clients[0].toObject();
+    const dynamicOrder = Object.keys(firstClientObj);
+
+    // Map over each client and apply the transformations
+    const orderedClients = clients.map(client => {
+      const clientObj = client.toObject();
+      const updatedClientObj = {};
+
+      // Apply the `getLastUpdatedValue` function to each key's value
+      for (const key in clientObj) {
+        updatedClientObj[key] = getLastUpdatedValue(clientObj[key]);
+      }
+
+      // Reorder the keys of the object according to the dynamic order
+      return reorderKeys(updatedClientObj, dynamicOrder);
+    });
+
+    res.json(orderedClients); // Send the ordered client data as JSON
+  } catch (error) {
+    console.error('Error fetching clients:', error); // Log the error
+    res.status(500).send('Error fetching clients');
+  }
+});
