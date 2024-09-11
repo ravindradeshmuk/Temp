@@ -1,0 +1,1397 @@
+const express = require('express');
+const router = express.Router();
+ const twClient=require('../models/twModels');
+
+const User=require('../models/User')
+const AssignedStatus=require('../models/addStatus')
+
+
+
+
+// get the data of tw client 
+router.get('/api/twclient', async (req, res) => {
+    try {
+      const includeId = req.query.includeId === 'true';
+      
+      // Fetch data from the database
+      const clients = await twClient.find({}, includeId ? '' : '-_id');
+      
+      if (clients.length === 0) {
+        return res.json([]);
+      }
+      
+      // Get all keys from the first client object to create the desired order dynamically
+      const firstClientObj = clients[0].toObject();
+      const dynamicOrder = Object.keys(firstClientObj);
+      
+      // Function to reorder keys based on the dynamic order
+      const reorderKeys = (obj, order) => {
+        const orderedObj = {};
+        order.forEach(key => {
+          if (key in obj) {
+            orderedObj[key] = obj[key];
+          }
+        });
+        return orderedObj;
+      };
+      
+      // Function to get the last updated value from nested arrays
+      const getLastUpdatedValue = (obj) => {
+        if (Array.isArray(obj) && obj.length > 0) {
+          const lastUpdate = obj[obj.length - 1];
+          return lastUpdate.value;
+        }
+        return obj;
+      };
+      
+      // Reorder keys and extract last updated values for each client object
+      const orderedClients = clients.map(client => {
+        const clientObj = client.toObject();
+        const updatedClientObj = {};
+        for (const key in clientObj) {
+          updatedClientObj[key] = getLastUpdatedValue(clientObj[key]);
+        }
+        return reorderKeys(updatedClientObj, dynamicOrder);
+      });
+      
+      res.json(orderedClients);
+    } catch (error) {
+      console.error('Error fetching clients:', error); // Debugging log
+      res.status(500).send('Error fetching clients');
+    }
+  });
+
+  router.get('/api/userdata', async (req, res) => {
+    try {
+      // Fetch user team data from the database
+      const userData = await User.find().lean().exec();
+      res.json(userData);
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+  router.get('/status-options', async (req, res) => {
+    const { product, heading } = req.query;
+  
+    try {
+        const statusData = await AssignedStatus.findOne({ product, heading });
+        
+        if (!statusData) {
+            return res.status(404).json({ message: 'Status options not found' });
+        }
+  
+        res.status(200).json(statusData.status);
+    } catch (error) {
+        console.error('Error fetching status options:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+  });
+  router.get('/heading-product-team-role', async (req, res) => {
+    try {
+      const result = await AssignedStatus.find({}, 'heading product team role'); // Select only the required fields
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch data' });
+    }
+  });
+  // update the tw client dropdown status in tw tracker 
+  router.patch('/updateClientData/:id', async (req, res) => {
+    const { id } = req.params;
+    const { clientName, columnName, newValue, loginBy, currentTime, caseNumber, notes, isCanceled } = req.body;
+    
+    try {
+      const client = await twClient.findById(id);
+      if (!client) {
+        return res.status(404).send({ message: 'Client not found' });
+      }
+  
+      const updateObject = {
+        name: clientName,
+        timestamp: currentTime,
+        loginBy: loginBy,
+        newValue: newValue,
+        caseNumber: caseNumber || '',
+        notes: notes || ''
+      };
+  
+      if (isCanceled) {
+        // Update all columns to 'Cancelled' for cancelled clients
+        Object.keys(client._doc).forEach(key => {
+          if (key !== '_id' && key !== '__v' && key !== 'Canceled Client') {
+            updateColumn(client, key, 'Cancelled', updateObject);
+          }
+        });
+      } else {
+        // Update only the specified column
+        if (!client[columnName]) {
+          return res.status(400).send({ message: `Column ${columnName} not found` });
+        }
+        updateColumn(client, columnName, newValue, updateObject);
+      }
+      
+      client.markModified(columnName);
+      await client.save();
+      res.status(200).send({ message: 'Client updated successfully', client });
+    } catch (error) {
+      console.error('Error updating client:', error);
+      res.status(500).send({ message: 'Internal server error' });
+    }
+  });
+  
+  function updateColumn(client, columnName, newValue, updateObject) {
+    const column = client[columnName];
+    
+    if (Array.isArray(column)) {
+      const objIndex = column.findIndex((obj) => obj.value === 'pending');
+      if (objIndex !== -1) {
+        column[objIndex].value = newValue;
+        column[objIndex].updated.push(updateObject);
+        if (updateObject.caseNumber && updateObject.notes) {
+          column[objIndex].caseNumber = updateObject.caseNumber;
+          column[objIndex].notes = updateObject.notes;
+        }
+      } else {
+        column.push({
+          value: newValue,
+          updated: [updateObject],
+          caseNumber: updateObject.caseNumber,
+          notes: updateObject.notes
+        });
+      }
+    } else if (typeof column === 'object' && column !== null) {
+      column.value = newValue;
+      if (!Array.isArray(column.updated)) {
+        column.updated = [];
+      }
+      column.updated.push(updateObject);
+      if (updateObject.caseNumber && updateObject.notes) {
+        column.caseNumber = updateObject.caseNumber;
+        column.notes = updateObject.notes;
+      }
+    } else {
+      client[columnName] = {
+        value: newValue,
+        updated: [updateObject],
+        // caseNumber: updateObject.caseNumber,
+        // notes: updateObject.notes
+      };
+    }
+    client.markModified(columnName);
+  }
+//update the time on the tw tracker
+router.patch('/updateTime/:id', async (req, res) => {
+  const { id } = req.params;
+  const updateData = req.body; // This could be { columnName: newValue }
+
+  try {
+    // Find the document by _id and update the specified field
+    const updatedDocument = await twClient.findByIdAndUpdate(id, updateData, { new: true });
+    if (updatedDocument) {
+      res.status(200).json(updatedDocument)
+    // broadcastUpdate(updatedDocument); // Emit update to all clients
+    console.log('Broadcasting update:', updatedDocument);
+
+     
+    } else {
+      res.status(404).send('Document not found');
+    }
+  } catch (error) {
+    console.error('Error updating document:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+// GET route to last five chages on tw tracker 
+
+router.get('/client/tableData/:rowId/:columnName', async (req, res) => {
+  const { rowId, columnName } = req.params;
+  try {
+    const client = await twClient.findById(rowId).lean();
+    if (!client) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    const columnData = client[columnName];
+    if (!columnData || !Array.isArray(columnData)) {
+      return res.status(404).json({ message: 'Column data not found or invalid format' });
+    }
+
+    const formattedData = columnData.flatMap(item => {
+      return item.updated.map(update => ({
+        timestamp: update.timestamp,
+        value: item.value,
+        newValue: update.newValue,
+        loginBy: update.loginBy,
+        caseNumber: update.caseNumber || '',
+        notes: update.notes || ''
+      }));
+    }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(1, 11);
+
+    res.json(formattedData);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+  
+
+
+module.exports = router;
+#############################################################################
+suncomm routes=>
+const express = require('express');
+const router = express.Router();
+const suncomClient=require('../models/suncomModels')
+const User=require('../models/User')
+const AssignedStatus=require('../models/addStatus')
+  // get the data of suncom client 
+  router.get('/api/suncomclient', async (req, res) => {
+    try {
+      const includeId = req.query.includeId === 'true';
+      
+      // Fetch data from the database
+      const clients = await suncomClient.find({}, includeId ? '' : '-_id');
+      
+      if (clients.length === 0) {
+        return res.json([]);
+      }
+      
+      // Get all keys from the first client object to create the desired order dynamically
+      const firstClientObj = clients[0].toObject();
+      const dynamicOrder = Object.keys(firstClientObj);
+      
+      // Function to reorder keys based on the dynamic order
+      const reorderKeys = (obj, order) => {
+        const orderedObj = {};
+        order.forEach(key => {
+          if (key in obj) {
+            orderedObj[key] = obj[key];
+          }
+        });
+        return orderedObj;
+      };
+      
+      // Function to get the last updated value from nested arrays
+      const getLastUpdatedValue = (obj) => {
+        if (Array.isArray(obj) && obj.length > 0) {
+          const lastUpdate = obj[obj.length - 1];
+          return lastUpdate.value;
+        }
+        return obj;
+      };
+      
+      // Reorder keys and extract last updated values for each client object
+      const orderedClients = clients.map(client => {
+        const clientObj = client.toObject();
+        const updatedClientObj = {};
+        for (const key in clientObj) {
+          updatedClientObj[key] = getLastUpdatedValue(clientObj[key]);
+        }
+        return reorderKeys(updatedClientObj, dynamicOrder);
+      });
+      
+      res.json(orderedClients);
+    } catch (error) {
+      console.error('Error fetching clients:', error); // Debugging log
+      res.status(500).send('Error fetching clients');
+    }
+  });
+
+  router.get('/api/userdata', async (req, res) => {
+    try {
+      // Fetch user team data from the database
+      const userData = await User.find().lean().exec();
+      res.json(userData);
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+  router.get('/status-options', async (req, res) => {
+    const { product, heading } = req.query;
+  
+    try {
+        const statusData = await AssignedStatus.findOne({ product, heading });
+        
+        if (!statusData) {
+            return res.status(404).json({ message: 'Status options not found' });
+        }
+  
+        res.status(200).json(statusData.status);
+    } catch (error) {
+        console.error('Error fetching status options:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+  });
+  router.get('/heading-product-team-role', async (req, res) => {
+    try {
+      const result = await AssignedStatus.find({}, 'heading product team role'); // Select only the required fields
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch data' });
+    }
+  });
+  // update the tw client dropdown status in tw tracker 
+  router.patch('/updateClientData/:id', async (req, res) => {
+    const { id } = req.params;
+    const { clientName, columnName, newValue, loginBy, currentTime, caseNumber, notes, isCanceled } = req.body;
+    
+    try {
+      const client = await suncomClient.findById(id);
+      if (!client) {
+        return res.status(404).send({ message: 'Client not found' });
+      }
+  
+      const updateObject = {
+        name: clientName,
+        timestamp: currentTime,
+        loginBy: loginBy,
+        newValue: newValue,
+        caseNumber: caseNumber || '',
+        notes: notes || ''
+      };
+  
+      if (isCanceled) {
+        // Update all columns to 'Cancelled' for cancelled clients
+        Object.keys(client._doc).forEach(key => {
+          if (key !== '_id' && key !== '__v' && key !== 'Canceled Client') {
+            updateColumn(client, key, 'Cancelled', updateObject);
+          }
+        });
+      } else {
+        // Update only the specified column
+        if (!client[columnName]) {
+          return res.status(400).send({ message: `Column ${columnName} not found` });
+        }
+        updateColumn(client, columnName, newValue, updateObject);
+      }
+      
+      client.markModified(columnName);
+      await client.save();
+      res.status(200).send({ message: 'Client updated successfully', client });
+    } catch (error) {
+      console.error('Error updating client:', error);
+      res.status(500).send({ message: 'Internal server error' });
+    }
+  });
+  
+  function updateColumn(client, columnName, newValue, updateObject) {
+    const column = client[columnName];
+    
+    if (Array.isArray(column)) {
+      const objIndex = column.findIndex((obj) => obj.value === 'pending');
+      if (objIndex !== -1) {
+        column[objIndex].value = newValue;
+        column[objIndex].updated.push(updateObject);
+        if (updateObject.caseNumber && updateObject.notes) {
+          column[objIndex].caseNumber = updateObject.caseNumber;
+          column[objIndex].notes = updateObject.notes;
+        }
+      } else {
+        column.push({
+          value: newValue,
+          updated: [updateObject],
+          caseNumber: updateObject.caseNumber,
+          notes: updateObject.notes
+        });
+      }
+    } else if (typeof column === 'object' && column !== null) {
+      column.value = newValue;
+      if (!Array.isArray(column.updated)) {
+        column.updated = [];
+      }
+      column.updated.push(updateObject);
+      if (updateObject.caseNumber && updateObject.notes) {
+        column.caseNumber = updateObject.caseNumber;
+        column.notes = updateObject.notes;
+      }
+    } else {
+      client[columnName] = {
+        value: newValue,
+        updated: [updateObject],
+        // caseNumber: updateObject.caseNumber,
+        // notes: updateObject.notes
+      };
+    }
+    client.markModified(columnName);
+  }
+//update the time on the tw tracker
+router.patch('/updateTime/:id', async (req, res) => {
+  const { id } = req.params;
+  const updateData = req.body; // This could be { columnName: newValue }
+
+  try {
+    // Find the document by _id and update the specified field
+    const updatedDocument = await suncomClient.findByIdAndUpdate(id, updateData, { new: true });
+    if (updatedDocument) {
+      res.status(200).json(updatedDocument)
+    // broadcastUpdate(updatedDocument); // Emit update to all clients
+    // console.log('Broadcasting update:', updatedDocument);
+
+     
+    } else {
+      res.status(404).send('Document not found');
+    }
+  } catch (error) {
+    console.error('Error updating document:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+// GET route to last five chages on tw tracker 
+
+router.get('/client/tableData/:rowId/:columnName', async (req, res) => {
+  const { rowId, columnName } = req.params;
+  try {
+    const client = await suncomClient.findById(rowId).lean();
+    if (!client) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    const columnData = client[columnName];
+    if (!columnData || !Array.isArray(columnData)) {
+      return res.status(404).json({ message: 'Column data not found or invalid format' });
+    }
+
+    const formattedData = columnData.flatMap(item => {
+      return item.updated.map(update => ({
+        timestamp: update.timestamp,
+        value: item.value,
+        newValue: update.newValue,
+        loginBy: update.loginBy,
+        caseNumber: update.caseNumber || '',
+        notes: update.notes || ''
+      }));
+    }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(1, 11);
+
+    res.json(formattedData);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+ module.exports = router
+############################################################################################
+azure route=>
+const express = require('express');
+const router = express.Router();
+const AzureClient=require('../models/AzureModels')
+const User=require('../models/User')
+const AssignedStatus=require('../models/addStatus')
+   // get the data of azure client 
+   router.get('/api/azureclient', async (req, res) => {
+    try {
+      const includeId = req.query.includeId === 'true';
+      
+      // Fetch data from the database
+      const clients = await AzureClient.find({}, includeId ? '' : '-_id');
+      
+      if (clients.length === 0) {
+        return res.json([]);
+      }
+      
+      // Get all keys from the first client object to create the desired order dynamically
+      const firstClientObj = clients[0].toObject();
+      const dynamicOrder = Object.keys(firstClientObj);
+      
+      // Function to reorder keys based on the dynamic order
+      const reorderKeys = (obj, order) => {
+        const orderedObj = {};
+        order.forEach(key => {
+          if (key in obj) {
+            orderedObj[key] = obj[key];
+          }
+        });
+        return orderedObj;
+      };
+      
+      // Function to get the last updated value from nested arrays
+      const getLastUpdatedValue = (obj) => {
+        if (Array.isArray(obj) && obj.length > 0) {
+          const lastUpdate = obj[obj.length - 1];
+          return lastUpdate.value;
+        }
+        return obj;
+      };
+      
+      // Reorder keys and extract last updated values for each client object
+      const orderedClients = clients.map(client => {
+        const clientObj = client.toObject();
+        const updatedClientObj = {};
+        for (const key in clientObj) {
+          updatedClientObj[key] = getLastUpdatedValue(clientObj[key]);
+        }
+        return reorderKeys(updatedClientObj, dynamicOrder);
+      });
+      
+      res.json(orderedClients);
+    } catch (error) {
+      console.error('Error fetching clients:', error); // Debugging log
+      res.status(500).send('Error fetching clients');
+    }
+  });
+
+  router.get('/api/userdata', async (req, res) => {
+    try {
+      // Fetch user team data from the database
+      const userData = await User.find().lean().exec();
+      res.json(userData);
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+  router.get('/status-options', async (req, res) => {
+    const { product, heading } = req.query;
+  
+    try {
+        const statusData = await AssignedStatus.findOne({ product, heading });
+        
+        if (!statusData) {
+            return res.status(404).json({ message: 'Status options not found' });
+        }
+  
+        res.status(200).json(statusData.status);
+    } catch (error) {
+        console.error('Error fetching status options:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+  });
+  router.get('/heading-product-team-role', async (req, res) => {
+    try {
+      const result = await AssignedStatus.find({}, 'heading product team role'); // Select only the required fields
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch data' });
+    }
+  });
+  // update the tw client dropdown status in tw tracker 
+  router.patch('/updateClientData/:id', async (req, res) => {
+    const { id } = req.params;
+    const { clientName, columnName, newValue, loginBy, currentTime, caseNumber, notes, isCanceled } = req.body;
+    
+    try {
+      const client = await AzureClient.findById(id);
+      if (!client) {
+        return res.status(404).send({ message: 'Client not found' });
+      }
+  
+      const updateObject = {
+        name: clientName,
+        timestamp: currentTime,
+        loginBy: loginBy,
+        newValue: newValue,
+        caseNumber: caseNumber || '',
+        notes: notes || ''
+      };
+  
+      if (isCanceled) {
+        // Update all columns to 'Cancelled' for cancelled clients
+        Object.keys(client._doc).forEach(key => {
+          if (key !== '_id' && key !== '__v' && key !== 'Canceled Client') {
+            updateColumn(client, key, 'Cancelled', updateObject);
+          }
+        });
+      } else {
+        // Update only the specified column
+        if (!client[columnName]) {
+          return res.status(400).send({ message: `Column ${columnName} not found` });
+        }
+        updateColumn(client, columnName, newValue, updateObject);
+      }
+      
+      client.markModified(columnName);
+      await client.save();
+      res.status(200).send({ message: 'Client updated successfully', client });
+    } catch (error) {
+      console.error('Error updating client:', error);
+      res.status(500).send({ message: 'Internal server error' });
+    }
+  });
+  
+  function updateColumn(client, columnName, newValue, updateObject) {
+    const column = client[columnName];
+    
+    if (Array.isArray(column)) {
+      const objIndex = column.findIndex((obj) => obj.value === 'pending');
+      if (objIndex !== -1) {
+        column[objIndex].value = newValue;
+        column[objIndex].updated.push(updateObject);
+        if (updateObject.caseNumber && updateObject.notes) {
+          column[objIndex].caseNumber = updateObject.caseNumber;
+          column[objIndex].notes = updateObject.notes;
+        }
+      } else {
+        column.push({
+          value: newValue,
+          updated: [updateObject],
+          caseNumber: updateObject.caseNumber,
+          notes: updateObject.notes
+        });
+      }
+    } else if (typeof column === 'object' && column !== null) {
+      column.value = newValue;
+      if (!Array.isArray(column.updated)) {
+        column.updated = [];
+      }
+      column.updated.push(updateObject);
+      if (updateObject.caseNumber && updateObject.notes) {
+        column.caseNumber = updateObject.caseNumber;
+        column.notes = updateObject.notes;
+      }
+    } else {
+      client[columnName] = {
+        value: newValue,
+        updated: [updateObject],
+        // caseNumber: updateObject.caseNumber,
+        // notes: updateObject.notes
+      };
+    }
+    client.markModified(columnName);
+  }
+//update the time on the tw tracker
+router.patch('/updateTime/:id', async (req, res) => {
+  const { id } = req.params;
+  const updateData = req.body; // This could be { columnName: newValue }
+
+  try {
+    // Find the document by _id and update the specified field
+    const updatedDocument = await AzureClient.findByIdAndUpdate(id, updateData, { new: true });
+    if (updatedDocument) {
+      res.status(200).json(updatedDocument)
+    // broadcastUpdate(updatedDocument); // Emit update to all clients
+    // console.log('Broadcasting update:', updatedDocument);
+
+     
+    } else {
+      res.status(404).send('Document not found');
+    }
+  } catch (error) {
+    console.error('Error updating document:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+// GET route to last five chages on tw tracker 
+
+router.get('/client/tableData/:rowId/:columnName', async (req, res) => {
+  const { rowId, columnName } = req.params;
+  try {
+    const client = await AzureClient.findById(rowId).lean();
+    if (!client) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    const columnData = client[columnName];
+    if (!columnData || !Array.isArray(columnData)) {
+      return res.status(404).json({ message: 'Column data not found or invalid format' });
+    }
+
+    const formattedData = columnData.flatMap(item => {
+      return item.updated.map(update => ({
+        timestamp: update.timestamp,
+        value: item.value,
+        newValue: update.newValue,
+        loginBy: update.loginBy,
+        caseNumber: update.caseNumber || '',
+        notes: update.notes || ''
+      }));
+    }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(1, 11);
+
+    res.json(formattedData);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+module.exports = router;
+######################################################################
+aus routes=>
+const express = require('express');
+const router = express.Router();
+const ausClient=require('../models/ausModels');
+const User=require('../models/User')
+const AssignedStatus=require('../models/addStatus')
+// get the data of aus client 
+router.get('/api/ausclient', async (req, res) => {
+    try {
+      const includeId = req.query.includeId === 'true';
+      
+      // Fetch data from the database
+      const clients = await ausClient.find({}, includeId ? '' : '-_id');
+      
+      if (clients.length === 0) {
+        return res.json([]);
+      }
+      
+      // Get all keys from the first client object to create the desired order dynamically
+      const firstClientObj = clients[0].toObject();
+      const dynamicOrder = Object.keys(firstClientObj);
+      
+      // Function to reorder keys based on the dynamic order
+      const reorderKeys = (obj, order) => {
+        const orderedObj = {};
+        order.forEach(key => {
+          if (key in obj) {
+            orderedObj[key] = obj[key];
+          }
+        });
+        return orderedObj;
+      };
+      
+      // Function to get the last updated value from nested arrays
+      const getLastUpdatedValue = (obj) => {
+        if (Array.isArray(obj) && obj.length > 0) {
+          const lastUpdate = obj[obj.length - 1];
+          return lastUpdate.value;
+        }
+        return obj;
+      };
+      
+      // Reorder keys and extract last updated values for each client object
+      const orderedClients = clients.map(client => {
+        const clientObj = client.toObject();
+        const updatedClientObj = {};
+        for (const key in clientObj) {
+          updatedClientObj[key] = getLastUpdatedValue(clientObj[key]);
+        }
+        return reorderKeys(updatedClientObj, dynamicOrder);
+      });
+      
+      res.json(orderedClients);
+    } catch (error) {
+      console.error('Error fetching clients:', error); // Debugging log
+      res.status(500).send('Error fetching clients');
+    }
+  });
+
+  router.get('/api/userdata', async (req, res) => {
+    try {
+      // Fetch user team data from the database
+      const userData = await User.find().lean().exec();
+      res.json(userData);
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+  router.get('/status-options', async (req, res) => {
+    const { product, heading } = req.query;
+  
+    try {
+        const statusData = await AssignedStatus.findOne({ product, heading });
+        
+        if (!statusData) {
+            return res.status(404).json({ message: 'Status options not found' });
+        }
+  
+        res.status(200).json(statusData.status);
+    } catch (error) {
+        console.error('Error fetching status options:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+  });
+  router.get('/heading-product-team-role', async (req, res) => {
+    try {
+      const result = await AssignedStatus.find({}, 'heading product team role'); // Select only the required fields
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch data' });
+    }
+  });
+  // update the tw client dropdown status in tw tracker 
+  router.patch('/updateClientData/:id', async (req, res) => {
+    const { id } = req.params;
+    const { clientName, columnName, newValue, loginBy, currentTime, caseNumber, notes, isCanceled } = req.body;
+    
+    try {
+      const client = await ausClient.findById(id);
+      if (!client) {
+        return res.status(404).send({ message: 'Client not found' });
+      }
+  
+      const updateObject = {
+        name: clientName,
+        timestamp: currentTime,
+        loginBy: loginBy,
+        newValue: newValue,
+        caseNumber: caseNumber || '',
+        notes: notes || ''
+      };
+  
+      if (isCanceled) {
+        // Update all columns to 'Cancelled' for cancelled clients
+        Object.keys(client._doc).forEach(key => {
+          if (key !== '_id' && key !== '__v' && key !== 'Canceled Client') {
+            updateColumn(client, key, 'Cancelled', updateObject);
+          }
+        });
+      } else {
+        // Update only the specified column
+        if (!client[columnName]) {
+          return res.status(400).send({ message: `Column ${columnName} not found` });
+        }
+        updateColumn(client, columnName, newValue, updateObject);
+      }
+      
+      client.markModified(columnName);
+      await client.save();
+      res.status(200).send({ message: 'Client updated successfully', client });
+    } catch (error) {
+      console.error('Error updating client:', error);
+      res.status(500).send({ message: 'Internal server error' });
+    }
+  });
+  
+  function updateColumn(client, columnName, newValue, updateObject) {
+    const column = client[columnName];
+    
+    if (Array.isArray(column)) {
+      const objIndex = column.findIndex((obj) => obj.value === 'pending');
+      if (objIndex !== -1) {
+        column[objIndex].value = newValue;
+        column[objIndex].updated.push(updateObject);
+        if (updateObject.caseNumber && updateObject.notes) {
+          column[objIndex].caseNumber = updateObject.caseNumber;
+          column[objIndex].notes = updateObject.notes;
+        }
+      } else {
+        column.push({
+          value: newValue,
+          updated: [updateObject],
+          caseNumber: updateObject.caseNumber,
+          notes: updateObject.notes
+        });
+      }
+    } else if (typeof column === 'object' && column !== null) {
+      column.value = newValue;
+      if (!Array.isArray(column.updated)) {
+        column.updated = [];
+      }
+      column.updated.push(updateObject);
+      if (updateObject.caseNumber && updateObject.notes) {
+        column.caseNumber = updateObject.caseNumber;
+        column.notes = updateObject.notes;
+      }
+    } else {
+      client[columnName] = {
+        value: newValue,
+        updated: [updateObject],
+        // caseNumber: updateObject.caseNumber,
+        // notes: updateObject.notes
+      };
+    }
+    client.markModified(columnName);
+  }
+//update the time on the tw tracker
+router.patch('/updateTime/:id', async (req, res) => {
+  const { id } = req.params;
+  const updateData = req.body; // This could be { columnName: newValue }
+
+  try {
+    // Find the document by _id and update the specified field
+    const updatedDocument = await AzureClient.findByIdAndUpdate(id, updateData, { new: true });
+    if (updatedDocument) {
+      res.status(200).json(updatedDocument)
+    // broadcastUpdate(updatedDocument); // Emit update to all clients
+    // console.log('Broadcasting update:', updatedDocument);
+
+     
+    } else {
+      res.status(404).send('Document not found');
+    }
+  } catch (error) {
+    console.error('Error updating document:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+// GET route to last five chages on tw tracker 
+
+router.get('/client/tableData/:rowId/:columnName', async (req, res) => {
+  const { rowId, columnName } = req.params;
+  try {
+    const client = await AzureClient.findById(rowId).lean();
+    if (!client) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    const columnData = client[columnName];
+    if (!columnData || !Array.isArray(columnData)) {
+      return res.status(404).json({ message: 'Column data not found or invalid format' });
+    }
+
+    const formattedData = columnData.flatMap(item => {
+      return item.updated.map(update => ({
+        timestamp: update.timestamp,
+        value: item.value,
+        newValue: update.newValue,
+        loginBy: update.loginBy,
+        caseNumber: update.caseNumber || '',
+        notes: update.notes || ''
+      }));
+    }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(1, 11);
+
+    res.json(formattedData);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+ module.exports = router;
+#########################################################################
+const express = require('express');
+const router = express.Router();
+const adhocClient=require('../models/adhocModels');
+const User=require('../models/User')
+const AssignedStatus=require('../models/addStatus')
+// get the data of adhoc client 
+router.get('/api/adhocclient', async (req, res) => {
+try {
+      const includeId = req.query.includeId === 'true';
+      
+      // Fetch data from the database
+      const clients = await adhocClient.find({}, includeId ? '' : '-_id');
+      
+      if (clients.length === 0) {
+        return res.json([]);
+      }
+      
+      // Get all keys from the first client object to create the desired order dynamically
+      const firstClientObj = clients[0].toObject();
+      const dynamicOrder = Object.keys(firstClientObj);
+      
+      // Function to reorder keys based on the dynamic order
+      const reorderKeys = (obj, order) => {
+        const orderedObj = {};
+        order.forEach(key => {
+          if (key in obj) {
+            orderedObj[key] = obj[key];
+          }
+        });
+        return orderedObj;
+      };
+      
+      // Function to get the last updated value from nested arrays
+      const getLastUpdatedValue = (obj) => {
+        if (Array.isArray(obj) && obj.length > 0) {
+          const lastUpdate = obj[obj.length - 1];
+          return lastUpdate.value;
+        }
+        return obj;
+      };
+      
+      // Reorder keys and extract last updated values for each client object
+      const orderedClients = clients.map(client => {
+        const clientObj = client.toObject();
+        const updatedClientObj = {};
+        for (const key in clientObj) {
+          updatedClientObj[key] = getLastUpdatedValue(clientObj[key]);
+        }
+        return reorderKeys(updatedClientObj, dynamicOrder);
+      });
+      
+      res.json(orderedClients);
+    } catch (error) {
+      console.error('Error fetching clients:', error); // Debugging log
+      res.status(500).send('Error fetching clients');
+    }
+  });
+
+  router.get('/api/userdata', async (req, res) => {
+    try {
+      // Fetch user team data from the database
+      const userData = await User.find().lean().exec();
+      res.json(userData);
+    } catch (error) {
+      console.error('Error fetching user data:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+  router.get('/status-options', async (req, res) => {
+    const { product, heading } = req.query;
+  
+    try {
+        const statusData = await AssignedStatus.findOne({ product, heading });
+        
+        if (!statusData) {
+            return res.status(404).json({ message: 'Status options not found' });
+        }
+  
+        res.status(200).json(statusData.status);
+    } catch (error) {
+        console.error('Error fetching status options:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+  });
+  router.get('/heading-product-team-role', async (req, res) => {
+    try {
+      const result = await AssignedStatus.find({}, 'heading product team role'); // Select only the required fields
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch data' });
+    }
+  });
+  // update the tw client dropdown status in tw tracker 
+  router.patch('/updateClientData/:id', async (req, res) => {
+    const { id } = req.params;
+    const { clientName, columnName, newValue, loginBy, currentTime, caseNumber, notes, isCanceled } = req.body;
+    
+    try {
+      const client = await adhocClient.findById(id);
+      if (!client) {
+        return res.status(404).send({ message: 'Client not found' });
+      }
+  
+      const updateObject = {
+        name: clientName,
+        timestamp: currentTime,
+        loginBy: loginBy,
+        newValue: newValue,
+        caseNumber: caseNumber || '',
+        notes: notes || ''
+      };
+  
+      if (isCanceled) {
+        // Update all columns to 'Cancelled' for cancelled clients
+        Object.keys(client._doc).forEach(key => {
+          if (key !== '_id' && key !== '__v' && key !== 'Canceled Client') {
+            updateColumn(client, key, 'Cancelled', updateObject);
+          }
+        });
+      } else {
+        // Update only the specified column
+        if (!client[columnName]) {
+          return res.status(400).send({ message: `Column ${columnName} not found` });
+        }
+        updateColumn(client, columnName, newValue, updateObject);
+      }
+      
+      client.markModified(columnName);
+      await client.save();
+      res.status(200).send({ message: 'Client updated successfully', client });
+    } catch (error) {
+      console.error('Error updating client:', error);
+      res.status(500).send({ message: 'Internal server error' });
+    }
+  });
+  
+  function updateColumn(client, columnName, newValue, updateObject) {
+    const column = client[columnName];
+    
+    if (Array.isArray(column)) {
+      const objIndex = column.findIndex((obj) => obj.value === 'pending');
+      if (objIndex !== -1) {
+        column[objIndex].value = newValue;
+        column[objIndex].updated.push(updateObject);
+        if (updateObject.caseNumber && updateObject.notes) {
+          column[objIndex].caseNumber = updateObject.caseNumber;
+          column[objIndex].notes = updateObject.notes;
+        }
+      } else {
+        column.push({
+          value: newValue,
+          updated: [updateObject],
+          caseNumber: updateObject.caseNumber,
+          notes: updateObject.notes
+        });
+      }
+    } else if (typeof column === 'object' && column !== null) {
+      column.value = newValue;
+      if (!Array.isArray(column.updated)) {
+        column.updated = [];
+      }
+      column.updated.push(updateObject);
+      if (updateObject.caseNumber && updateObject.notes) {
+        column.caseNumber = updateObject.caseNumber;
+        column.notes = updateObject.notes;
+      }
+    } else {
+      client[columnName] = {
+        value: newValue,
+        updated: [updateObject],
+        // caseNumber: updateObject.caseNumber,
+        // notes: updateObject.notes
+      };
+    }
+    client.markModified(columnName);
+  }
+//update the time on the tw tracker
+router.patch('/updateTime/:id', async (req, res) => {
+  const { id } = req.params;
+  const updateData = req.body; // This could be { columnName: newValue }
+
+  try {
+    // Find the document by _id and update the specified field
+    const updatedDocument = await adhocClient.findByIdAndUpdate(id, updateData, { new: true });
+    if (updatedDocument) {
+      res.status(200).json(updatedDocument)
+    // broadcastUpdate(updatedDocument); // Emit update to all clients
+    // console.log('Broadcasting update:', updatedDocument);
+
+     
+    } else {
+      res.status(404).send('Document not found');
+    }
+  } catch (error) {
+    console.error('Error updating document:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+// GET route to last five chages on tw tracker 
+
+router.get('/client/tableData/:rowId/:columnName', async (req, res) => {
+  const { rowId, columnName } = req.params;
+  try {
+    const client = await adhocClient.findById(rowId).lean();
+    if (!client) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    const columnData = client[columnName];
+    if (!columnData || !Array.isArray(columnData)) {
+      return res.status(404).json({ message: 'Column data not found or invalid format' });
+    }
+
+    const formattedData = columnData.flatMap(item => {
+      return item.updated.map(update => ({
+        timestamp: update.timestamp,
+        value: item.value,
+        newValue: update.newValue,
+        loginBy: update.loginBy,
+        caseNumber: update.caseNumber || '',
+        notes: update.notes || ''
+      }));
+    }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(1, 11);
+
+    res.json(formattedData);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+ module.exports = router;
+################################################################################
+qts routes=>
+const express = require('express');
+const router = express.Router();
+const qtsClient=require('../models/qtsModels')
+const User=require('../models/User')
+const AssignedStatus=require('../models/addStatus')
+// get the data of qts client 
+router.get('/api/qtsclient', async (req, res) => {
+  try {
+    const includeId = req.query.includeId === 'true';
+    
+    // Fetch data from the database
+    const clients = await qtsClient.find({}, includeId ? '' : '-_id');
+    
+    if (clients.length === 0) {
+      return res.json([]);
+    }
+    
+    // Get all keys from the first client object to create the desired order dynamically
+    const firstClientObj = clients[0].toObject();
+    const dynamicOrder = Object.keys(firstClientObj);
+    
+    // Function to reorder keys based on the dynamic order
+    const reorderKeys = (obj, order) => {
+      const orderedObj = {};
+      order.forEach(key => {
+        if (key in obj) {
+          orderedObj[key] = obj[key];
+        }
+      });
+      return orderedObj;
+    };
+    
+    // Function to get the last updated value from nested arrays
+    const getLastUpdatedValue = (obj) => {
+      if (Array.isArray(obj) && obj.length > 0) {
+        const lastUpdate = obj[obj.length - 1];
+        return lastUpdate.value;
+      }
+      return obj;
+    };
+    
+    // Reorder keys and extract last updated values for each client object
+    const orderedClients = clients.map(client => {
+      const clientObj = client.toObject();
+      const updatedClientObj = {};
+      for (const key in clientObj) {
+        updatedClientObj[key] = getLastUpdatedValue(clientObj[key]);
+      }
+      return reorderKeys(updatedClientObj, dynamicOrder);
+    });
+    
+    res.json(orderedClients);
+  } catch (error) {
+    console.error('Error fetching clients:', error); // Debugging log
+    res.status(500).send('Error fetching clients');
+  }
+});
+
+router.get('/api/userdata', async (req, res) => {
+  try {
+    // Fetch user team data from the database
+    const userData = await User.find().lean().exec();
+    res.json(userData);
+  } catch (error) {
+    console.error('Error fetching user data:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+router.get('/status-options', async (req, res) => {
+  const { product, heading } = req.query;
+
+  try {
+      const statusData = await AssignedStatus.findOne({ product, heading });
+      
+      if (!statusData) {
+          return res.status(404).json({ message: 'Status options not found' });
+      }
+
+      res.status(200).json(statusData.status);
+  } catch (error) {
+      console.error('Error fetching status options:', error);
+      res.status(500).json({ message: 'Server error' });
+  }
+});
+router.get('/heading-product-team-role', async (req, res) => {
+  try {
+    const result = await AssignedStatus.find({}, 'heading product team role'); // Select only the required fields
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch data' });
+  }
+});
+// update the tw client dropdown status in tw tracker 
+router.patch('/updateClientData/:id', async (req, res) => {
+  const { id } = req.params;
+  const { clientName, columnName, newValue, loginBy, currentTime, caseNumber, notes, isCanceled } = req.body;
+  
+  try {
+    const client = await qtsClient.findById(id);
+    if (!client) {
+      return res.status(404).send({ message: 'Client not found' });
+    }
+
+    const updateObject = {
+      name: clientName,
+      timestamp: currentTime,
+      loginBy: loginBy,
+      newValue: newValue,
+      caseNumber: caseNumber || '',
+      notes: notes || ''
+    };
+
+    if (isCanceled) {
+      // Update all columns to 'Cancelled' for cancelled clients
+      Object.keys(client._doc).forEach(key => {
+        if (key !== '_id' && key !== '__v' && key !== 'Canceled Client') {
+          updateColumn(client, key, 'Cancelled', updateObject);
+        }
+      });
+    } else {
+      // Update only the specified column
+      if (!client[columnName]) {
+        return res.status(400).send({ message: `Column ${columnName} not found` });
+      }
+      updateColumn(client, columnName, newValue, updateObject);
+    }
+    
+    client.markModified(columnName);
+    await client.save();
+    res.status(200).send({ message: 'Client updated successfully', client });
+  } catch (error) {
+    console.error('Error updating client:', error);
+    res.status(500).send({ message: 'Internal server error' });
+  }
+});
+
+function updateColumn(client, columnName, newValue, updateObject) {
+  const column = client[columnName];
+  
+  if (Array.isArray(column)) {
+    const objIndex = column.findIndex((obj) => obj.value === 'pending');
+    if (objIndex !== -1) {
+      column[objIndex].value = newValue;
+      column[objIndex].updated.push(updateObject);
+      if (updateObject.caseNumber && updateObject.notes) {
+        column[objIndex].caseNumber = updateObject.caseNumber;
+        column[objIndex].notes = updateObject.notes;
+      }
+    } else {
+      column.push({
+        value: newValue,
+        updated: [updateObject],
+        caseNumber: updateObject.caseNumber,
+        notes: updateObject.notes
+      });
+    }
+  } else if (typeof column === 'object' && column !== null) {
+    column.value = newValue;
+    if (!Array.isArray(column.updated)) {
+      column.updated = [];
+    }
+    column.updated.push(updateObject);
+    if (updateObject.caseNumber && updateObject.notes) {
+      column.caseNumber = updateObject.caseNumber;
+      column.notes = updateObject.notes;
+    }
+  } else {
+    client[columnName] = {
+      value: newValue,
+      updated: [updateObject],
+      // caseNumber: updateObject.caseNumber,
+      // notes: updateObject.notes
+    };
+  }
+  client.markModified(columnName);
+}
+//update the time on the tw tracker
+router.patch('/updateTime/:id', async (req, res) => {
+const { id } = req.params;
+const updateData = req.body; // This could be { columnName: newValue }
+
+try {
+  // Find the document by _id and update the specified field
+  const updatedDocument = await qtsClient.findByIdAndUpdate(id, updateData, { new: true });
+  if (updatedDocument) {
+    res.status(200).json(updatedDocument)
+  // broadcastUpdate(updatedDocument); // Emit update to all clients
+  // console.log('Broadcasting update:', updatedDocument);
+
+   
+  } else {
+    res.status(404).send('Document not found');
+  }
+} catch (error) {
+  console.error('Error updating document:', error);
+  res.status(500).send('Internal Server Error');
+}
+});
+// GET route to last five chages on tw tracker 
+
+router.get('/client/tableData/:rowId/:columnName', async (req, res) => {
+const { rowId, columnName } = req.params;
+try {
+  const client = await qtsClient.findById(rowId).lean();
+  if (!client) {
+    return res.status(404).json({ message: 'Client not found' });
+  }
+
+  const columnData = client[columnName];
+  if (!columnData || !Array.isArray(columnData)) {
+    return res.status(404).json({ message: 'Column data not found or invalid format' });
+  }
+
+  const formattedData = columnData.flatMap(item => {
+    return item.updated.map(update => ({
+      timestamp: update.timestamp,
+      value: item.value,
+      newValue: update.newValue,
+      loginBy: update.loginBy,
+      caseNumber: update.caseNumber || '',
+      notes: update.notes || ''
+    }));
+  }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(1, 11);
+
+  res.json(formattedData);
+} catch (err) {
+  res.status(500).json({ message: err.message });
+}
+});
+ module.exports = router;
