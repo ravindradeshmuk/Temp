@@ -1,0 +1,243 @@
+import React, { useState, useEffect, useContext } from "react";
+import { Link, useNavigate, useLocation } from "react-router-dom";
+import {
+  AppBar,
+  Toolbar,
+  Typography,
+  Drawer,
+  List,
+  ListItem,
+  ListItemText,
+  Button,
+  Menu,
+  MenuItem,
+  IconButton,
+  Box,
+} from "@mui/material";
+import AccountCircle from "@mui/icons-material/AccountCircle";
+import MenuIcon from "@mui/icons-material/Menu";
+import moment from "moment-timezone";
+import { AuthContext } from "../Components/UserContext";
+import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
+
+const Navbar = () => {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [anchorEl, setAnchorEl] = useState(null);
+  const [profileMenuAnchorEl, setProfileMenuAnchorEl] = useState(null);
+  const [currentEstDateTime, setCurrentEstDateTime] = useState("");
+  const { isLoggedIn, firstName, logout } = useContext(AuthContext);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [selectedTracker, setSelectedTracker] = useState(() => {
+    return localStorage.getItem("selectedTracker") || "Select Tracker";
+  });
+
+  useEffect(() => {
+    const tick = () => {
+      const nowInEst = moment
+        .tz("America/New_York")
+        .format("MM/DD/YYYY hh:mm:ss A");
+      setCurrentEstDateTime(nowInEst);
+    };
+    const intervalId = setInterval(tick, 1000);
+    return () => clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    const trackerPath = location.pathname.split('/')[1];
+    const trackerMap = {
+      scmtracker: "SCM Tracker",
+      twtracker: "TW Tracker",
+      azuretracker: "Azure Tracker",
+      suncommtracker: "Suncomm Tracker",
+      austracker: "AUS Tracker",
+      adhoctracker: "Adhoc Tracker",
+      qtstracker: "QTS Tracker",
+    };
+    if (trackerMap[trackerPath]) {
+      setSelectedTracker(trackerMap[trackerPath]);
+      localStorage.setItem("selectedTracker", trackerMap[trackerPath]);
+    }
+  }, [location]);
+
+  const handleDrawerToggle = () => {
+    setMobileOpen(!mobileOpen);
+  };
+
+  const handleLogout = () => {
+    handleProfileMenuClose();
+    logout();
+    navigate("/login");
+  };
+
+  const handleTrackerMenuClick = (event) => {
+    setAnchorEl(event.currentTarget);
+  };
+
+  const handleTrackerMenuClose = () => {
+    setAnchorEl(null);
+  };
+
+  const handleTrackerClick = (path, name) => {
+    setSelectedTracker(name);
+    localStorage.setItem("selectedTracker", name);
+    handleTrackerMenuClose();
+    navigate(path);
+  };
+
+  const handleProfileMenuClick = (event) => {
+    setProfileMenuAnchorEl(event.currentTarget);
+  };
+
+  const handleProfileMenuClose = () => {
+    setProfileMenuAnchorEl(null);
+  };
+
+  const navigateToProfile = () => {
+    handleProfileMenuClose();
+    navigate("/profile");
+  };
+
+  const pages = ["Home"];
+
+  const drawer = (
+    <Box sx={{ width: 240 }}>
+      <List>
+        {pages.map((text) => (
+          <ListItem
+            button
+            component={Link}
+            to={`/${text.toLowerCase()}`}
+            key={text}
+            onClick={handleDrawerToggle}
+          >
+            <ListItemText primary={text} />
+          </ListItem>
+        ))}
+      </List>
+    </Box>
+  );
+
+  return (
+    <Box sx={{ flexGrow: 1 }}>
+      <AppBar position="fixed" sx={{ backgroundColor: "#393392" }}>
+        <Toolbar>
+          <IconButton
+            color="inherit"
+            aria-label="open drawer"
+            edge="start"
+            onClick={handleDrawerToggle}
+            sx={{ mr: 2, display: { sm: 'none' } }}
+          >
+            <MenuIcon />
+          </IconButton>
+          <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1 }}>
+            <img
+              src="/AWhite.png"
+              alt="Altera Logo"
+              style={{ marginRight: "10px", width: 120 }}
+            />
+            <Box>
+              <Typography variant="h6" noWrap component="div">
+                Hosting Patching Portal
+              </Typography>
+              <Typography variant="caption" noWrap component="div">
+                Date and Time (EST): {currentEstDateTime}
+              </Typography>
+            </Box>
+          </Box>
+          <Box sx={{ display: { xs: 'none', sm: 'flex' }, alignItems: 'center' }}>
+            {pages.map((text) => (
+              <Button
+                key={text}
+                color="inherit"
+                component={Link}
+                to={`/${text.toLowerCase()}`}
+                sx={{ mx: 1 }}
+              >
+                {text}
+              </Button>
+            ))}
+            <Button
+              color="inherit"
+              onClick={handleTrackerMenuClick}
+              endIcon={<ArrowDropDownIcon />}
+              sx={{ mx: 1 }}
+            >
+              {selectedTracker}
+            </Button>
+            <Menu
+              anchorEl={anchorEl}
+              open={Boolean(anchorEl)}
+              onClose={handleTrackerMenuClose}
+            >
+              <MenuItem onClick={() => handleTrackerClick("/scmtracker", "SCM Tracker")}>SCM Tracker</MenuItem>
+              <MenuItem onClick={() => handleTrackerClick("/twtracker", "TW Tracker")}>TW Tracker</MenuItem>
+              <MenuItem onClick={() => handleTrackerClick("/azuretracker", "Azure Tracker")}>Azure Tracker</MenuItem>
+              <MenuItem onClick={() => handleTrackerClick("/suncommtracker", "Suncomm Tracker")}>Suncomm Tracker</MenuItem>
+              <MenuItem onClick={() => handleTrackerClick("/austracker", "AUS Tracker")}>AUS Tracker</MenuItem>
+              <MenuItem onClick={() => handleTrackerClick("/adhoctracker", "Adhoc Tracker")}>Adhoc Tracker</MenuItem>
+              <MenuItem onClick={() => handleTrackerClick("/qtstracker", "QTS Tracker")}>QTS Tracker</MenuItem>
+            </Menu>
+            {isLoggedIn ? (
+              <>
+                <IconButton
+                  color="inherit"
+                  onClick={handleProfileMenuClick}
+                  sx={{ ml: 1 }}
+                >
+                  <AccountCircle />
+                </IconButton>
+                <Typography variant="subtitle1" sx={{ ml: 1 }}>
+                  {firstName || "User"}
+                </Typography>
+                <Menu
+                  anchorEl={profileMenuAnchorEl}
+                  open={Boolean(profileMenuAnchorEl)}
+                  onClose={handleProfileMenuClose}
+                >
+                  <MenuItem onClick={navigateToProfile}>Profile</MenuItem>
+                  <MenuItem onClick={handleLogout}>Logout</MenuItem>
+                </Menu>
+              </>
+            ) : (
+              <>
+                <Button color="inherit" component={Link} to="/signup" sx={{ mx: 1 }}>
+                  Sign Up
+                </Button>
+                <Button color="inherit" component={Link} to="/login" sx={{ mx: 1 }}>
+                  Login
+                </Button>
+              </>
+            )}
+          </Box>
+        </Toolbar>
+      </AppBar>
+      <Drawer
+        variant="temporary"
+        open={mobileOpen}
+        onClose={handleDrawerToggle}
+        ModalProps={{
+          keepMounted: true, // Better open performance on mobile.
+        }}
+        sx={{
+          display: { xs: 'block', sm: 'none' },
+          '& .MuiDrawer-paper': { boxSizing: 'border-box', width: 240, bgcolor: "#2F2257" },
+        }}
+      >
+        {drawer}
+      </Drawer>
+      <Toolbar /> {/* This provides spacing below the AppBar */}
+    </Box>
+  );
+};
+
+export default Navbar;
+#####################################################################################
+// Check user role and redirect accordingly
+if (user.role === 'admin_role') {
+  navigate('/admindashboard/admin', { replace: true });
+} else {
+  const from = location.state?.from?.pathname || "/home";
+  navigate(from, { replace: true });
+}
